@@ -1,0 +1,9 @@
+# Render: static site built from source. Deploy with "New > Blueprint" pointed at this repo.
+services:
+  - type: web
+    name: buildsim
+    runtime: docker
+    dockerfilePath: ./web/Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /index.html

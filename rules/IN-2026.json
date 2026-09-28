@@ -1,0 +1,102 @@
+{
+  "id": "IN-2026",
+  "jurisdiction": "Indiana (statewide, Class 1 structures)",
+  "code_edition": "2026 Indiana Building Code (675 IAC 13-2.7), adopting 2024 IBC with Indiana amendments",
+  "verified": "partial \u2014 2026-09-27: \u00a71010.1.1 (door 32 in / 80 in) and \u00a71011.5.2 (riser/tread) checked against ICC 2024 IBC online; all other parameters from secondary sources or unverified; Indiana amendments to Ch.10 NOT yet checked",
+  "reviewer": null,
+  "rules": [
+    {
+      "id": "egress.door.min_clear_width",
+      "cite": "IBC 2024 \u00a71010.1.1",
+      "severity": "error",
+      "check": "egress_door_min_width",
+      "min_clear_width_m": 0.813,
+      "verified": "2026-09-27 ICC codes.iccsafe.org IBC2024 \u00a71010.1.1 (32 in / 813 mm)"
+    },
+    {
+      "id": "door.min_height",
+      "cite": "IBC 2024 \u00a71010.1.1",
+      "severity": "warning",
+      "check": "door_min_height",
+      "min_height_m": 2.032,
+      "verified": "2026-09-27 ICC codes.iccsafe.org IBC2024 \u00a71010.1.1 (80 in / 2032 mm)"
+    },
+    {
+      "id": "stair.geometry",
+      "cite": "IBC 2024 \u00a71011.2 / \u00a71011.5.2",
+      "severity": "error",
+      "check": "stair_geometry",
+      "max_riser_m": 0.178,
+      "min_riser_m": 0.102,
+      "min_tread_m": 0.279,
+      "min_width_m": 1.118,
+      "verified": "2026-09-27 riser/tread per ICC IBC2024 \u00a71011.5.2 (7 in max, 4 in min, 11 in tread); width 44 in per \u00a71011.2 from secondary source \u2014 36 in exception for <50 occupants not modelled"
+    },
+    {
+      "id": "ramp.slope",
+      "cite": "IBC 2024 \u00a71012.2 / \u00a71012.4 / \u00a71012.5.2",
+      "severity": "error",
+      "check": "ramp_slope",
+      "min_run_per_rise": 12.0,
+      "max_rise_m": 0.76,
+      "min_width_m": 0.914,
+      "verified": "secondary source only \u2014 1:12 (\u00a71012.2), 30 in rise (\u00a71012.4), 36 in clear (\u00a71012.5.2); confirm against ICC text"
+    },
+    {
+      "id": "occupant_load.business.single_exit",
+      "cite": "IBC 2024 Table 1004.5 / Table 1006.2.1",
+      "severity": "warning",
+      "check": "occupant_load_exits",
+      "occupancy": "Business",
+      "area_per_occupant_m2": 13.9,
+      "max_occupants_single_exit": 49,
+      "verified": "partial \u2014 49-occupant single-exit limit for Group B confirmed via secondary source (\u00a71006.2.1/\u00a71006.3.4; travel-distance condition not modelled); 150 gross sq ft/occupant (13.9 m2) Table 1004.5 unverified"
+    },
+    {
+      "id": "door.max_leaf_width",
+      "cite": "IBC 2024 \u00a71010.1.1",
+      "severity": "warning",
+      "verified": "secondary source only \u2014 48 in max single leaf; confirm against ICC text",
+      "check": "door_max_leaf_width",
+      "max_leaf_width_m": 1.219
+    },
+    {
+      "id": "stair.max_rise_per_flight",
+      "cite": "IBC 2024 \u00a71011.8",
+      "severity": "warning",
+      "verified": "secondary source only \u2014 12 ft (3.658 m) max vertical rise between landings; confirm against ICC text",
+      "check": "stair_max_rise_per_flight",
+      "max_rise_m": 3.658
+    },
+    {
+      "id": "occupant_load.assembly.single_exit",
+      "cite": "IBC 2024 Table 1004.5 / Table 1006.2.1",
+      "severity": "warning",
+      "verified": "unverified \u2014 assembly unconcentrated 15 sq ft/occupant and 49-occupant single-exit limit from secondary sources",
+      "check": "occupant_load_exits",
+      "occupancy": "Assembly",
+      "area_per_occupant_m2": 1.39,
+      "max_occupants_single_exit": 49
+    },
+    {
+      "id": "occupant_load.mercantile.single_exit",
+      "cite": "IBC 2024 Table 1004.5 / Table 1006.2.1",
+      "severity": "warning",
+      "verified": "unverified \u2014 60 gross sq ft/occupant and 49-occupant single-exit limit from secondary sources",
+      "check": "occupant_load_exits",
+      "occupancy": "Mercantile",
+      "area_per_occupant_m2": 5.57,
+      "max_occupants_single_exit": 49
+    },
+    {
+      "id": "occupant_load.educational.single_exit",
+      "cite": "IBC 2024 Table 1004.5 / Table 1006.2.1",
+      "severity": "warning",
+      "verified": "unverified \u2014 classroom 20 net sq ft/occupant and 49-occupant single-exit limit from secondary sources",
+      "check": "occupant_load_exits",
+      "occupancy": "Educational",
+      "area_per_occupant_m2": 1.86,
+      "max_occupants_single_exit": 49
+    }
+  ]
+}

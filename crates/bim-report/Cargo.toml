@@ -1,0 +1,15 @@
+[package]
+name = "bim-report"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bim-core.workspace = true
+bim-geom.workspace = true
+bim-schedule.workspace = true
+bim-rules.workspace = true
+bim-takeoff.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,9 @@
+[package]
+name = "bim-takeoff"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bim-core.workspace = true
+glam.workspace = true

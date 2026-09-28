@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>buildsim — 4D report</title>
+<style>/*__CSS__*/</style>
+
+</head>
+<body>
+<div id="app">
+<header><h1 id="title">buildsim</h1><span class="sub" id="subtitle"></span><span style="flex:1"></span><button class="btn" id="play">Play</button></header>
+<div id="view"><canvas id="c"></canvas>
+ <div id="hud"><div class="day">Day <span id="day">0</span> / <span id="total">0</span></div><div class="cost">Cumulative cost $<span id="cost">0</span></div><input id="slider" type="range" min="0" max="0" value="0" step="1"></div>
+</div>
+<aside>
+ <h2>Legend</h2><div class="legend" id="legend"></div>
+ <label class="chk"><input type="checkbox" id="showClash"> Show clashes (<span id="nclash">0</span>)</label>
+ <h2>Schedule</h2><div id="phases"></div>
+ <h2>Cost by phase</h2><div id="costs"></div>
+ <h2>Advisories (<span id="nadv">0</span>)</h2><div id="advs"></div>
+ <div class="disclaimer" id="disc"></div>
+</aside>
+</div>
+<script id="data" type="application/json">/*__DATA__*/</script>
+<script>/*__THREE__*/</script>
+<script>/*__VIEWER__*/</script>
+<script>renderReport(JSON.parse(document.getElementById("data").textContent));</script>
+</body>
+</html>

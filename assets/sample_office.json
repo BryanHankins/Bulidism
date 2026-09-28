@@ -1,0 +1,335 @@
+{
+  "schema_version": 1,
+  "name": "Sample Office",
+  "rule_set": "IN-2026",
+  "phases": [
+    {
+      "id": 0,
+      "name": "Foundation",
+      "duration_days": 10,
+      "depends_on": []
+    },
+    {
+      "id": 1,
+      "name": "Structure",
+      "duration_days": 15,
+      "depends_on": [
+        0
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Envelope",
+      "duration_days": 12,
+      "depends_on": [
+        1
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Fit-out",
+      "duration_days": 20,
+      "depends_on": [
+        2
+      ]
+    }
+  ],
+  "elements": [
+    {
+      "id": "5a3b0000-0000-4000-8000-000000000001",
+      "name": "Ground slab",
+      "kind": {
+        "Slab": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "size_x": 12.0,
+          "size_z": 8.0,
+          "thickness": 0.2
+        }
+      },
+      "discipline": "Structural",
+      "phase": 0,
+      "start_offset_days": 0,
+      "lod": "Lod200",
+      "cost_code": "A1010",
+      "material": ""
+    },
+    {
+      "id": "5a3b0000-0000-4000-8000-000000000002",
+      "name": "Column 1",
+      "kind": {
+        "Column": {
+          "base": [
+            0.0,
+            0.2,
+            0.0
+          ],
+          "width": 0.4,
+          "depth": 0.4,
+          "height": 3.2
+        }
+      },
+      "discipline": "Structural",
+      "phase": 1,
+      "start_offset_days": 0,
+      "lod": "Lod200",
+      "cost_code": "B1010",
+      "material": ""
+    },
+    {
+      "id": "5a3b0000-0000-4000-8000-000000000003",
+      "name": "Column 2",
+      "kind": {
+        "Column": {
+          "base": [
+            12.0,
+            0.2,
+            0.0
+          ],
+          "width": 0.4,
+          "depth": 0.4,
+          "height": 3.2
+        }
+      },
+      "discipline": "Structural",
+      "phase": 1,
+      "start_offset_days": 0,
+      "lod": "Lod200",
+      "cost_code": "B1010",
+      "material": ""
+    },
+    {
+      "id": "5a3b0000-0000-4000-8000-000000000004",
+      "name": "Column 3",
+      "kind": {
+        "Column": {
+          "base": [
+            0.0,
+            0.2,
+            8.0
+          ],
+          "width": 0.4,
+          "depth": 0.4,
+          "height": 3.2
+        }
+      },
+      "discipline": "Structural",
+      "phase": 1,
+      "start_offset_days": 0,
+      "lod": "Lod200",
+      "cost_code": "B1010",
+      "material": ""
+    },
+    {
+      "id": "5a3b0000-0000-4000-8000-000000000005",
+      "name": "Column 4",
+      "kind": {
+        "Column": {
+          "base": [
+            12.0,
+            0.2,
+            8.0
+          ],
+          "width": 0.4,
+          "depth": 0.4,
+          "height": 3.2
+        }
+      },
+      "discipline": "Structural",
+      "phase": 1,
+      "start_offset_days": 0,
+      "lod": "Lod200",
+      "cost_code": "B1010",
+      "material": ""
+    },
+    {
+      "id": "5a3b0000-0000-4000-8000-000000000006",
+      "name": "South wall",
+      "kind": {
+        "Wall": {
+          "start": [
+            0.0,
+            0.2,
+            0.0
+          ],
+          "end": [
+            12.0,
+            0.2,
+            0.0
+          ],
+          "height": 3.0,
+          "thickness": 0.25
+        }
+      },
+      "discipline": "Architectural",
+      "phase": 2,
+      "start_offset_days": 0,
+      "lod": "Lod200",
+      "cost_code": "B2010",
+      "material": ""
+    },
+    {
+      "id": "5a3b0000-0000-4000-8000-000000000007",
+      "name": "Main entry",
+      "kind": {
+        "Door": {
+          "host": "5a3b0000-0000-4000-8000-000000000006",
+          "offset": 5.0,
+          "width": 0.75,
+          "height": 2.1,
+          "is_egress": true
+        }
+      },
+      "discipline": "Architectural",
+      "phase": 3,
+      "start_offset_days": 0,
+      "lod": "Lod200",
+      "cost_code": "C1020",
+      "material": ""
+    },
+    {
+      "id": "5a3b0000-0000-4000-8000-000000000008",
+      "name": "North wall",
+      "kind": {
+        "Wall": {
+          "start": [
+            0.0,
+            0.2,
+            8.0
+          ],
+          "end": [
+            12.0,
+            0.2,
+            8.0
+          ],
+          "height": 3.0,
+          "thickness": 0.25
+        }
+      },
+      "discipline": "Architectural",
+      "phase": 2,
+      "start_offset_days": 4,
+      "lod": "Lod200",
+      "cost_code": "B2010",
+      "material": ""
+    },
+    {
+      "id": "5a3b0000-0000-4000-8000-000000000009",
+      "name": "Rear exit",
+      "kind": {
+        "Door": {
+          "host": "5a3b0000-0000-4000-8000-000000000008",
+          "offset": 9.0,
+          "width": 0.9,
+          "height": 2.1,
+          "is_egress": true
+        }
+      },
+      "discipline": "Architectural",
+      "phase": 3,
+      "start_offset_days": 0,
+      "lod": "Lod200",
+      "cost_code": "C1020",
+      "material": ""
+    },
+    {
+      "id": "5a3b0000-0000-4000-8000-00000000000a",
+      "name": "Roof beam",
+      "kind": {
+        "Beam": {
+          "start": [
+            0.0,
+            3.4,
+            0.0
+          ],
+          "end": [
+            12.0,
+            3.4,
+            8.0
+          ],
+          "width": 0.3,
+          "depth": 0.5
+        }
+      },
+      "discipline": "Structural",
+      "phase": 1,
+      "start_offset_days": 8,
+      "lod": "Lod200",
+      "cost_code": "B1010",
+      "material": ""
+    },
+    {
+      "id": "5a3b0000-0000-4000-8000-00000000000b",
+      "name": "Stair to mezzanine",
+      "kind": {
+        "Stair": {
+          "base": [
+            1.0,
+            0.2,
+            3.0
+          ],
+          "run_length": 3.5,
+          "total_rise": 3.0,
+          "width": 1.2,
+          "riser_count": 17
+        }
+      },
+      "discipline": "Architectural",
+      "phase": 3,
+      "start_offset_days": 0,
+      "lod": "Lod200",
+      "cost_code": "C2010",
+      "material": ""
+    },
+    {
+      "id": "5a3b0000-0000-4000-8000-00000000000c",
+      "name": "Entry ramp",
+      "kind": {
+        "Ramp": {
+          "base": [
+            6.0,
+            0.0,
+            -3.0
+          ],
+          "run_length": 2.4,
+          "rise": 0.2,
+          "width": 1.2
+        }
+      },
+      "discipline": "Site",
+      "phase": 3,
+      "start_offset_days": 0,
+      "lod": "Lod200",
+      "cost_code": "G2030",
+      "material": ""
+    }
+  ],
+  "spaces": [
+    {
+      "name": "Open office",
+      "occupancy": "Business",
+      "floor_area_m2": 96.0,
+      "egress_doors": [
+        "5a3b0000-0000-4000-8000-000000000007",
+        "5a3b0000-0000-4000-8000-000000000009"
+      ],
+      "bounds": [
+        0.0,
+        0.0,
+        12.0,
+        8.0
+      ]
+    }
+  ],
+  "unit_costs": {
+    "C1020": 85000,
+    "G2030": 35000,
+    "B1010": 95000,
+    "B2010": 22000,
+    "A1010": 18000,
+    "C2010": 120000
+  }
+}

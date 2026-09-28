@@ -1,0 +1,17 @@
+[package]
+name = "bim-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WebAssembly bindings for the buildsim construction planning engine"
+repository = "https://github.com/celestialcode/buildsim"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+bim-core.workspace = true
+bim-report.workspace = true
+serde_json.workspace = true
+# exact pin: 0.2.92 builds on cargo 1.75; bump freely on a current toolchain (keep wasm-bindgen-cli at the same version)
+wasm-bindgen = "=0.2.92"

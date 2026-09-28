@@ -1,0 +1,11 @@
+buildsim — third-party notices
+
+three.js r128 — MIT License — Copyright 2010-2021 Three.js Authors
+  Bundled at crates/bim-cli/vendor/three.r128.min.js and web/three.r128.min.js
+  Full text: crates/bim-cli/vendor/three.LICENSE
+
+Rust dependencies are MIT/Apache-2.0/Zlib; run `cargo deny check licenses` (policy in deny.toml)
+and `cargo tree` for the current list.
+
+Building code references (IBC section numbers) are citations only. No code text from the
+International Code Council is reproduced in this software or its rule files.

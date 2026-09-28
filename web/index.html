@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>buildsim</title>
+<link rel="stylesheet" href="viewer.css">
+<style>
+.tabs{display:flex;gap:6px;margin-bottom:10px}.tabs .btn[aria-selected=true]{background:var(--accent);color:#fff;border-color:var(--accent)}
+.pane[hidden]{display:none}
+form.add{display:grid;grid-template-columns:1fr 1fr;gap:6px 8px;margin:6px 0 12px}
+form.add label{display:flex;flex-direction:column;font-size:11px;color:var(--muted)}
+form.add input,form.add select{font:inherit;padding:4px 6px;border:1px solid var(--line);border-radius:4px;background:var(--bg);color:var(--ink)}
+form.add .full{grid-column:1/3}
+.el{display:flex;justify-content:space-between;gap:6px;padding:3px 0;border-bottom:1px dashed var(--line);font-size:13px}
+.el button{border:0;background:none;color:var(--err);cursor:pointer}
+textarea{width:100%;height:220px;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);padding:6px}
+.err{color:var(--err);font-size:12px;white-space:pre-wrap}
+#status{font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div id="app">
+<header><h1 id="title">buildsim</h1><span class="sub" id="subtitle"></span><span id="status"></span><span style="flex:1"></span>
+ <button class="btn" id="undo" disabled title="Ctrl+Z">↶</button><button class="btn" id="redo" disabled title="Ctrl+Y">↷</button><button class="btn" id="new">New</button><button class="btn" id="open">Open</button><button class="btn" id="save">Save</button><button class="btn" id="exportCsv">CSV</button><button class="btn" id="exportHtml">Report</button><button class="btn" id="play">Play</button>
+ <input type="file" id="file" accept="application/json" hidden></header>
+<div id="view"><canvas id="c"></canvas>
+ <div id="hud"><div class="day">Day <span id="day">0</span> / <span id="total">0</span></div><div class="cost">Cumulative cost $<span id="cost">0</span></div><input id="slider" type="range" min="0" max="0" value="0" step="1"></div>
+</div>
+<aside>
+ <div class="tabs"><button class="btn" data-tab="report" aria-selected="true">Report</button><button class="btn" data-tab="edit">Edit</button><button class="btn" data-tab="json">JSON</button></div>
+ <div class="pane" id="pane-report">
+  <h2>Legend</h2><div class="legend" id="legend"></div>
+  <label class="chk"><input type="checkbox" id="showClash"> Show clashes (<span id="nclash">0</span>)</label>
+  <label class="chk"><input type="checkbox" id="showSpaces" checked> Show space outlines</label>
+  <h2>Spaces</h2><div id="spaceList"></div>
+  <h2>Schedule</h2><div id="phases"></div>
+  <h2>Cost by phase</h2><div id="costs"></div>
+  <h2>Advisories (<span id="nadv">0</span>)</h2><div id="advs"></div>
+  <div class="disclaimer" id="disc"></div>
+ </div>
+ <div class="pane" id="pane-edit" hidden>
+  <div id="selPanel" hidden><h2>Selected</h2><form class="add" id="propForm"></form><div style="display:flex;gap:6px;margin-bottom:12px"><button class="btn" id="delSel">Delete</button><button class="btn" id="deselect">Deselect</button></div></div>
+  <h2>Place <small style="font-weight:400;color:var(--muted)">· drag a selected element to move it</small></h2><div style="display:flex;gap:6px;margin-bottom:10px"><button class="btn" id="placeWall">Place wall (2 clicks)</button><button class="btn" id="placeCol">Place column</button><button class="btn" id="placeDoor">Place door</button><span id="placeMsg" style="font-size:12px;color:var(--muted)"></span></div>
+  <h2>Add element</h2>
+  <form class="add" id="addForm"><label class="full">Type<select id="kind"></select></label><div id="fields" class="full" style="display:contents"></div><button class="btn full" type="submit">Add</button></form>
+  <h2>Phases</h2><div id="phaseEdit"></div>
+  <h2>Spaces</h2><div id="spaceEdit"></div>
+  <h2>Elements</h2><div id="elements"></div>
+ </div>
+ <div class="pane" id="pane-json" hidden>
+  <h2>Project JSON</h2><textarea id="jsonBox" spellcheck="false"></textarea>
+  <div style="display:flex;gap:6px;margin:6px 0"><button class="btn" id="apply">Apply</button><span id="jsonMsg" class="err"></span></div>
+ </div>
+ <div class="err" id="runErr"></div>
+</aside>
+</div>
+<script src="three.r128.min.js"></script>
+<script src="viewer.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
