@@ -76,8 +76,100 @@ pub struct RuleSet {
     pub verified: String,
     pub reviewer: Option<String>,
     pub rules: Vec<Rule>,
+    /// Parameters for the code analysis sheet (egress capacity, exits per story, plumbing).
+    #[serde(default)]
+    pub code_summary: Option<CodeSummaryParams>,
 }
 
+/// `[up to N occupants (None = no limit), value]` tiers.
+pub type Tiers = Vec<(Option<u32>, u32)>;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodeSummaryParams {
+    /// Provenance of these parameters.
+    pub verified: String,
+    pub cite_exits: String,
+    pub cite_capacity: String,
+    pub cite_plumbing: String,
+    /// Minimum exits per story by occupant load, e.g. [[500,2],[1000,3],[null,4]].
+    pub exits_by_occupant_load: Tiers,
+    /// Stories at or below this load may qualify for a single exit (not evaluated); no
+    /// exit-count finding is raised for them.
+    pub single_exit_screen_load: u32,
+    pub stair_m_per_occupant: f32,
+    pub other_m_per_occupant: f32,
+    /// Factors when sprinklered throughout with an emergency voice/alarm system.
+    pub stair_m_per_occupant_reduced: f32,
+    pub other_m_per_occupant_reduced: f32,
+    #[serde(default)]
+    pub plumbing: Vec<PlumbingRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlumbingRow {
+    pub occupancy: Occupancy,
+    pub fixture: String,
+    /// `[up to N occupants, 1 fixture per M occupants]`, applied in order to the remaining load;
+    /// ratios are summed and the total rounded up.
+    #[serde(default)]
+    pub per: Tiers,
+    /// Minimum count whenever the occupancy is present (e.g. 1 service sink).
+    #[serde(default)]
+    pub min: u32,
+    /// Ratio applies to each sex, with the load split in half.
+    #[serde(default)]
+    pub per_sex: bool,
+    pub verified: String,
+}
+
+impl CodeSummaryParams {
+    /// Minimum exits for a story's occupant load (0 when nobody is on it).
+    pub fn exits_required(&self, load: u32) -> u32 {
+        if load == 0 {
+            return 0;
+        }
+        self.exits_by_occupant_load
+            .iter()
+            .find(|(max, _)| match max {
+                None => true,
+                Some(m) => load <= *m,
+            })
+            .map(|(_, n)| *n)
+            .unwrap_or(2)
+    }
+}
+
+impl PlumbingRow {
+    /// Fixtures required per group (each sex when `per_sex`, else the whole load).
+    pub fn per_group(&self, load: u32) -> u32 {
+        if load == 0 {
+            return 0;
+        }
+        let served = if self.per_sex {
+            load as f32 / 2.0
+        } else {
+            load as f32
+        };
+        let (mut left, mut prev, mut ratio) = (served, 0.0f32, 0.0f32);
+        for (upto, per) in &self.per {
+            if left <= 0.0 || *per == 0 {
+                break;
+            }
+            let span = upto.map_or(left, |u| (u as f32 - prev).min(left));
+            ratio += span / *per as f32;
+            left -= span;
+            prev = upto.map_or(prev, |u| u as f32);
+        }
+        ((ratio - 1e-6).ceil().max(0.0) as u32).max(self.min)
+    }
+
+    /// Total fixtures for `load` occupants (both sexes when `per_sex`).
+    pub fn required(&self, load: u32) -> u32 {
+        self.per_group(load) * if self.per_sex { 2 } else { 1 }
+    }
+}
 /// What kind of quantity a finding measured (drives display units).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -166,6 +258,32 @@ pub fn egress_exits(p: &Project, s: &Space) -> usize {
 impl RuleSet {
     pub fn from_json(s: &str) -> Result<Self, RuleError> {
         Ok(serde_json::from_str(s)?)
+    }
+
+    /// Area per occupant (m²) for an occupancy, from its occupant-load rule if the set has one.
+    pub fn occupant_factor(&self, occ: Occupancy) -> Option<f32> {
+        self.rules.iter().find_map(|r| match r.check {
+            Check::OccupantLoadExits {
+                occupancy,
+                area_per_occupant_m2,
+                ..
+            } if occupancy == occ && area_per_occupant_m2 > 0.0 => Some(area_per_occupant_m2),
+            _ => None,
+        })
+    }
+
+    /// Leaf-to-clear deduction used by the egress door rule (0 if the set has none).
+    pub fn door_clear_deduction(&self) -> f32 {
+        self.rules
+            .iter()
+            .find_map(|r| match r.check {
+                Check::EgressDoorMinWidth {
+                    leaf_to_clear_deduction_m,
+                    ..
+                } => Some(leaf_to_clear_deduction_m),
+                _ => None,
+            })
+            .unwrap_or(0.0)
     }
 
     pub fn evaluate(&self, p: &Project) -> Vec<Advisory> {
@@ -532,6 +650,29 @@ mod tests {
                 Bound::Max => assert!(m > l, "{a:?}"),
             }
         }
+    }
+    #[test]
+    fn exit_table_and_plumbing_math() {
+        let rs = RuleSet::from_json(RS).unwrap();
+        let c = rs.code_summary.as_ref().unwrap();
+        let ex: Vec<u32> = [0, 1, 500, 501, 1000, 1001]
+            .iter()
+            .map(|l| c.exits_required(*l))
+            .collect();
+        assert_eq!(ex, vec![0, 2, 2, 3, 3, 4]);
+        let row = |f: &str| c.plumbing.iter().find(|r| r.fixture == f).unwrap();
+        // water closets, per sex: 1 per 25 for the first 50, then 1 per 50
+        assert_eq!(row("Water closets").required(7), 2); // 3.5 per sex -> 1 each
+        assert_eq!(row("Water closets").required(60), 4); // 30 -> 1.2 -> 2 each
+        assert_eq!(row("Water closets").required(120), 6); // 60 -> 50/25 + 10/50 = 2.2 -> 3 each
+        assert_eq!(row("Water closets").per_group(120), 3);
+        assert_eq!(row("Lavatories").required(200), 6); // 100 -> 80/40 + 20/80 = 2.25 -> 3 each
+        assert_eq!(row("Drinking fountains").required(250), 3);
+        assert_eq!(row("Service sinks").required(250), 1);
+        assert_eq!(row("Service sinks").required(0), 0);
+        assert_eq!(rs.occupant_factor(Occupancy::Business), Some(13.9));
+        assert_eq!(rs.occupant_factor(Occupancy::Storage), None);
+        assert!((rs.door_clear_deduction() - 0.064).abs() < 1e-6);
     }
     #[test]
     fn unknown_field_rejected() {

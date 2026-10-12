@@ -46,6 +46,26 @@ test('spaces show their level when the project has levels', () => {
   assert.ok(!printHtml(report(), 'metric').includes('<th>Level</th>'));
 });
 
+test('code analysis sheet', () => {
+  const code_summary = { verified: 'secondary <src>', cite_exits: 'T1006', cite_capacity: '§1005.3', cite_plumbing: 'T2902.1',
+    construction_type: null, sprinklered: true, voice_alarm: false, reduced_factors: false, stories: 2, height_m: 7.2,
+    total_area_m2: 1096, total_occupant_load: 79, occupancies: [{ occupancy: 'Business', area_m2: 1096, occupant_load: 79 }],
+    levels: [
+      { name: 'Level 1', occupant_load: 7, spaces_without_factor: 0, exits_required: 2, exits_provided: 2, door_width_required_m: 0.0356, door_width_provided_m: 1.522, stair_width_required_m: null, stair_width_provided_m: 0 },
+      { name: 'Level <2>', occupant_load: 72, spaces_without_factor: 1, exits_required: 2, exits_provided: 1, door_width_required_m: 0.366, door_width_provided_m: 0.836, stair_width_required_m: 0.549, stair_width_provided_m: 1.2 },
+    ],
+    plumbing: [{ occupancy: 'Business', fixture: 'Water closets', occupant_load: 79, per_group: 3, required: 6, per_sex: true, verified: 'study guide' }],
+    notes: ['Allowable area & height not evaluated'] };
+  const h = printHtml(report({ code_summary }), 'imperial');
+  assert.ok(h.includes('<h2>Code analysis</h2>') && h.indexOf('Code analysis') < h.indexOf('<h2>Findings</h2>'));
+  assert.ok(h.includes('not set</span> (allowable area and height not evaluated)'));
+  assert.ok(h.includes('Level &#60;2&#62;') && h.includes('(1 space(s) uncounted)'));
+  assert.ok(h.includes('<td class="num sev warning">2 / 1</td>'), 'short exits flagged');
+  assert.ok(!/<td[^>]*class="[^"]*"[^>]*class=/.test(h), 'one class attribute per cell');
+  assert.ok(h.includes('6 (3 per sex)') && h.includes('secondary &#60;src&#62;') && h.includes('Allowable area &#38; height'));
+  assert.ok(!printHtml(report(), 'metric').includes('Code analysis'), 'no sheet without parameters');
+});
+
 test('page footer is a safe CSS string', () => {
   const h = printHtml(report({ project: 'A "quoted" \\ name</style><script>' }), 'metric');
   const css = h.slice(h.indexOf('<style>'), h.indexOf('</style>'));

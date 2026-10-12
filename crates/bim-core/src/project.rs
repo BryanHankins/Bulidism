@@ -34,6 +34,8 @@ pub struct Project {
     /// Storeys, any order; elements and spaces refer to them by id. Optional in JSON.
     #[serde(default)]
     pub levels: Vec<Level>,
+    #[serde(default)]
+    pub building: BuildingInfo,
     pub elements: Vec<Element>,
     pub spaces: Vec<Space>,
     /// For imported models: the translation (metres, model axes) added to source coordinates
@@ -52,6 +54,7 @@ impl Project {
             rule_set: rule_set.into(),
             phases: vec![],
             levels: vec![],
+            building: BuildingInfo::default(),
             elements: vec![],
             spaces: vec![],
             source_offset: None,

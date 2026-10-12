@@ -4,6 +4,8 @@
 use bim_core::*;
 use serde::Serialize;
 
+pub mod code;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ReportError {
     #[error("project: {0}")]
@@ -103,6 +105,8 @@ pub struct Report {
     pub clashes: Vec<ClashOut>,
     pub advisories: Vec<bim_rules::Advisory>,
     pub rules_checked: Vec<RuleOut>,
+    /// Code analysis sheet, when the rule set has `code_summary` parameters.
+    pub code_summary: Option<code::CodeSummary>,
     /// Licensed reviewer of the rule set, if any (None = not yet reviewed).
     pub rules_reviewer: Option<String>,
     pub spaces: Vec<SpaceOut>,
@@ -200,6 +204,17 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
         None => ("none".into(), "no rule file".into(), "n/a".into(), vec![]),
     };
     let mut advisories = advisories;
+    // code analysis: story-level egress findings join the rule findings
+    let top_y = elements
+        .iter()
+        .flat_map(|e| e.positions.iter().skip(1).step_by(3).copied())
+        .reduce(f32::max);
+    let code_summary = rules
+        .and_then(|rs| code::summarize(project, rs, top_y))
+        .map(|(sum, found)| {
+            advisories.extend(found);
+            sum
+        });
     // an unpriced cost code silently totals $0; surface it, once per code (an
     // imported model has no rates yet, so per-element advisories would flood)
     let mut unpriced: std::collections::BTreeMap<&str, usize> = Default::default();
@@ -267,18 +282,9 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
             area_m2: s.area_m2(),
             exits: bim_rules::egress_exits(project, s),
             level: s.level.map(|l| l.0),
-            occupant_load: rules.and_then(|rs| {
-                rs.rules.iter().find_map(|r| match r.check {
-                    bim_rules::Check::OccupantLoadExits {
-                        occupancy,
-                        area_per_occupant_m2,
-                        ..
-                    } if occupancy == s.occupancy && area_per_occupant_m2 > 0.0 => {
-                        Some((s.area_m2() / area_per_occupant_m2).ceil() as u32)
-                    }
-                    _ => None,
-                })
-            }),
+            occupant_load: rules
+                .and_then(|rs| rs.occupant_factor(s.occupancy))
+                .map(|f| (s.area_m2() / f).ceil() as u32),
             bounds: s.bounds,
         })
         .collect();
@@ -286,6 +292,7 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
         spaces,
         levels,
         rules_checked,
+        code_summary,
         rules_reviewer: rules.and_then(|rs| rs.reviewer.clone()),
         project: project.name.clone(),
         rule_set,
