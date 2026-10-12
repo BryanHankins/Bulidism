@@ -1,6 +1,7 @@
 // Live editor: JS owns the project JSON; every edit re-runs the Rust pipeline in wasm.
 import init, * as bim from './pkg/bim_wasm.js';
 import { printHtml } from './print.js';
+import { costRows, perLabel, rateOut, rateIn, parseDollars, ratesToCsv, parseRatesCsv } from './costs.js';
 import { snapStep, lenToInput, parseLen, fmtArea, areaToInput, parseArea, qtyOut, convertMessage } from './units.js';
 
 const $ = id => document.getElementById(id);
@@ -83,7 +84,7 @@ function rerun(keepDay = true) {
   } catch (e) {
     $('runErr').textContent = String(e);
   }
-  renderEditor(); renderProps(); renderSpaces(); $('jsonBox').value = JSON.stringify(project, null, 2);
+  renderEditor(); renderProps(); renderSpaces(); renderCosts(); $('jsonBox').value = JSON.stringify(project, null, 2);
   autosave();
 }
 
@@ -96,7 +97,7 @@ function renderProps() {
   const e = selectedEl(); $('selPanel').hidden = !e; if (!e) return;
   const kind = Object.keys(e.kind)[0], k = e.kind[kind];
   const phases = project.phases.map(p => `<option value="${p.id}" ${p.id===e.phase?'selected':''}>${esc(p.name)}</option>`).join('');
-  let h = `<label class="full">Name<input name="name" value="${esc(e.name)}"></label><label>Phase<select name="phase">${phases}</select></label><label>Offset days<input name="start_offset_days" type="number" min="0" value="${e.start_offset_days||0}"></label><label>Cost code<input name="cost_code" value="${esc(e.cost_code)}"></label><label>Discipline<select name="discipline">${['Architectural','Structural','Mechanical','Electrical','Plumbing','Site'].map(d=>`<option ${d===e.discipline?'selected':''}>${d}</option>`).join('')}</select></label>`;
+  let h = `<label class="full">Name<input name="name" value="${esc(e.name)}"></label><label>Phase<select name="phase">${phases}</select></label><label>Offset days<input name="start_offset_days" type="number" min="0" value="${e.start_offset_days||0}"></label><label>Cost code<input name="cost_code" list="costCodes" value="${esc(e.cost_code)}"></label><label>Discipline<select name="discipline">${['Architectural','Structural','Mechanical','Electrical','Plumbing','Site'].map(d=>`<option ${d===e.discipline?'selected':''}>${d}</option>`).join('')}</select></label>`;
   for (const v of VEC[kind]) h += ['x','y','z'].map((ax,i) => `<label>${v} ${ax}${lenInput(`name="${v}.${i}"`, k[v][i])}</label>`).join('');
   for (const n of NUMERIC[kind]) h += isLen(n) ? `<label>${n}${lenInput(`name="${n}"`, k[n])}</label>` : `<label>${n}<input name="${n}" type="number" step="1" value="${k[n]}"></label>`;
   if (kind === 'Door') h += `<label>egress<select name="is_egress"><option value="1" ${k.is_egress?'selected':''}>yes</option><option value="" ${!k.is_egress?'selected':''}>no</option></select></label>`;
@@ -175,6 +176,47 @@ function renderSpaces() {
   $('addSpace').onclick = () => { snapshot(); project.spaces.push({ name: `Space ${project.spaces.length+1}`, occupancy: 'Business', floor_area_m2: 50, egress_doors: [], bounds: null }); rerun(); };
 }
 $('showSpaces').onchange = e => window.__viewer.setSpacesVisible(e.target.checked);
+
+// ---- unit costs ----
+// takeoff unit per element kind; mirrors bim_takeoff::quantity
+const UNIT_OF = { Wall: 'M2', Slab: 'M3', Column: 'M3', Beam: 'M3', Door: 'Each', Stair: 'M', Ramp: 'M2', Mesh: 'Each' };
+function rateRows() {
+  return costRows(project.unit_costs, project.elements.map(e => ({ cost_code: e.cost_code, unit: UNIT_OF[Object.keys(e.kind)[0]] })));
+}
+function renderCosts() {
+  const rows = rateRows(), unitOf = code => (rows.find(r => r.code === code) || {}).unit || null;
+  const shown = (r) => r.cents == null ? '' : rateOut(r.cents, r.unit, units).toFixed(2);
+  $('costEdit').innerHTML = `<table class="costs"><thead><tr><th>Code</th><th>Used by</th><th>Rate</th><th></th></tr></thead><tbody>${rows.map(r => {
+    const per = perLabel(r.unit, units);
+    const used = r.count ? `${r.count} element${r.count === 1 ? '' : 's'}${r.mixed ? ' · <b title="one code used for different units; split it">mixed units</b>' : ''}` : 'unused';
+    const rate = r.code ? `$<input data-code="${esc(r.code)}" value="${shown(r)}" placeholder="${r.count ? 'missing' : ''}" inputmode="decimal"> ${per ? '/' + per : ''}` : '<small>give these a cost code</small>';
+    return `<tr${r.cents == null && r.count ? ' class="missing"' : ''}><td>${r.code ? esc(r.code) : '(none)'}</td><td>${used}</td><td>${rate}</td><td>${r.cents != null ? `<button class="btn" data-delcode="${esc(r.code)}" title="Remove rate">✕</button>` : ''}</td></tr>`;
+  }).join('')}</tbody></table>
+  <div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 12px"><input id="newCode" placeholder="code" size="8"><input id="newRate" placeholder="$ rate" size="7" inputmode="decimal"><button class="btn" id="addRate">Add</button><button class="btn" id="exportRates">Export CSV</button><button class="btn" id="importRates">Import CSV</button></div>`;
+  $('costCodes').innerHTML = rows.filter(r => r.code).map(r => `<option value="${esc(r.code)}">`).join('');
+  const bad = v => { $('runErr').textContent = `Enter a rate in dollars, like 12.50 (got "${v}")`; };
+  $('costEdit').querySelectorAll('input[data-code]').forEach(inp => inp.onchange = () => {
+    const r = rows.find(x => x.code === inp.dataset.code), v = inp.value.trim();
+    if (v === '' || v === shown(r)) { renderCosts(); return; } // unchanged: don't let display rounding drift the stored rate
+    const d = parseDollars(v); if (Number.isNaN(d)) { bad(v); renderCosts(); return; }
+    snapshot(); project.unit_costs[r.code] = rateIn(d, r.unit, units); rerun();
+  });
+  $('costEdit').querySelectorAll('[data-delcode]').forEach(b => b.onclick = () => { snapshot(); delete project.unit_costs[b.dataset.delcode]; rerun(); });
+  $('addRate').onclick = () => {
+    const code = $('newCode').value.trim(), v = $('newRate').value, d = parseDollars(v);
+    if (!code) { $('runErr').textContent = 'Enter a cost code.'; return; }
+    if (Number.isNaN(d)) { bad(v); return; }
+    snapshot(); project.unit_costs[code] = rateIn(d, unitOf(code), units); rerun();
+  };
+  $('exportRates').onclick = () => download(`${project.name.replace(/\W+/g,'_')}_rates.csv`, ratesToCsv(rows, units), 'text/csv');
+  $('importRates').onclick = () => $('ratesFile').click();
+}
+$('ratesFile').onchange = async ev => {
+  const f = ev.target.files[0]; ev.target.value = ''; if (!f) return;
+  const { rates, errors } = parseRatesCsv(await f.text());
+  if (errors.length) { $('runErr').textContent = 'Rates not imported:\n' + errors.join('\n'); return; }
+  snapshot(); Object.assign(project.unit_costs, rates); notice = ` · imported ${Object.keys(rates).length} rates`; rerun();
+};
 
 // ---- click-to-place ----
 function setPlacing(mode){ placing = mode; placeStart = null; window.__viewer.setMarker(null); $('placeMsg').textContent = mode === 'wall' ? 'click start point' : mode === 'column' ? 'click position' : mode === 'door' ? 'click a wall' : ''; document.body.style.cursor = mode ? 'crosshair' : ''; }
