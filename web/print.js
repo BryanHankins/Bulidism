@@ -1,6 +1,6 @@
 // Printable code-check report: a standalone page the browser prints or saves as PDF.
 // Pure function of the engine report, so it can be tested without a browser.
-import { fmtArea, fmtVol } from './units.js';
+import { fmtArea, fmtVol, fmtMeasure } from './units.js';
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
 const money = v => '$' + (+v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -65,8 +65,8 @@ tr { break-inside: avoid; } td.num, th.num { text-align: right; white-space: now
 </div>
 
 <h2>Findings</h2>
-${table(['##', 'Severity', 'Element / space', 'Finding', 'Citation'],
-  findings.map((a, i) => `<tr><td class="num">${i + 1}</td><td class="sev ${esc(a.severity)}">${esc(LABEL[a.severity] || a.severity)}</td><td>${esc(a.subject)}</td><td>${esc(a.message)}</td><td>${esc(a.cite)}</td></tr>`),
+${table(['##', 'Severity', 'Element / space', 'Finding', 'Measured#', 'Required#', 'Citation'],
+  findings.map((a, i) => `<tr><td class="num">${i + 1}</td><td class="sev ${esc(a.severity)}">${esc(LABEL[a.severity] || a.severity)}</td><td>${esc(a.subject)}</td><td>${esc(a.check || a.message)}</td><td class="num">${esc(fmtMeasure(a.measured, a.measure, units))}</td><td class="num">${a.limit == null ? '—' : `${a.bound === 'max' ? '≤' : '≥'} ${esc(fmtMeasure(a.limit, a.measure, units))}`}</td><td>${esc(a.cite)}</td></tr>`),
   'No findings from this rule set.')}
 
 <h2>Rules checked</h2>

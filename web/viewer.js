@@ -111,6 +111,21 @@ let alive=true;
 function frame(t){if(!alive)return;loop(t);}
 function loop(t){if(playing&&t-last>120){last=t;setDay(day+1);if(day>=D.total_days){playing=false;$('play').textContent='Play'}}R.render(S,cam);requestAnimationFrame(frame)}
 setDay(opts.day||0); requestAnimationFrame(frame);
-window.__viewer={dispose(){alive=false;ac.abort();ro.disconnect();R.dispose();for(const m of meshes){m.geometry.dispose();m.material.dispose();}},get day(){return day},highlight,pick,groundPoint,setMarker(p){if(p){marker.position.set(p[0],0.15,p[1]);marker.visible=true;}else marker.visible=false;},get selected(){return selected},pickHit,showHandles,setSpacesVisible(v){spaceGroup.visible=v},visibleIds(){return meshes.filter(m=>m.visible).map(m=>m.userData.id)}};
+// Frame `focus` ({min,max}, model coords) from the current orbit angle with `ids` highlighted,
+// render once and capture a PNG; the live view is restored afterwards. Used for BCF snapshots.
+function snapshot(focus,ids,showClashes){
+  const vis=meshes.map(m=>m.visible), clashVis=clashGroup.visible, handlesVis=handleGroup.visible;
+  for(const m of meshes){m.visible=true;m.material.emissive.setHex((ids||[]).includes(m.userData.id)?0xc0301c:0x000000);}
+  clashGroup.visible=!!showClashes; handleGroup.visible=false;
+  const lo=new THREE.Vector3(...focus.min), hi=new THREE.Vector3(...focus.max), c=lo.clone().add(hi).multiplyScalar(0.5);
+  const r=Math.max(hi.clone().sub(lo).length()/2,1.5), out=new THREE.Vector3(Math.sin(phi)*Math.cos(theta),Math.cos(phi),Math.sin(phi)*Math.sin(theta));
+  cam.position.copy(c).addScaledVector(out,r/Math.tan(cam.fov*Math.PI/360)*1.3); cam.lookAt(c); cam.updateMatrixWorld();
+  R.render(S,cam);
+  const png=canvas.toDataURL('image/png');
+  const camera={position:cam.position.toArray(),direction:c.clone().sub(cam.position).normalize().toArray(),up:new THREE.Vector3(0,1,0).applyQuaternion(cam.quaternion).toArray(),fov:cam.fov};
+  meshes.forEach((m,i)=>m.visible=vis[i]); clashGroup.visible=clashVis; handleGroup.visible=handlesVis; highlight(selected); place(); R.render(S,cam);
+  return {png,camera};
+}
+window.__viewer={snapshot,dispose(){alive=false;ac.abort();ro.disconnect();R.dispose();for(const m of meshes){m.geometry.dispose();m.material.dispose();}},get day(){return day},highlight,pick,groundPoint,setMarker(p){if(p){marker.position.set(p[0],0.15,p[1]);marker.visible=true;}else marker.visible=false;},get selected(){return selected},pickHit,showHandles,setSpacesVisible(v){spaceGroup.visible=v},visibleIds(){return meshes.filter(m=>m.visible).map(m=>m.userData.id)}};
 if(opts.selected)highlight(opts.selected);
 };

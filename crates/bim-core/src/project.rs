@@ -36,6 +36,10 @@ pub struct Project {
     pub levels: Vec<Level>,
     pub elements: Vec<Element>,
     pub spaces: Vec<Space>,
+    /// For imported models: the translation (metres, model axes) added to source coordinates
+    /// when the model was re-centred, so exports (BCF viewpoints) can map back to the source.
+    #[serde(default)]
+    pub source_offset: Option<[f32; 3]>,
     /// Unit cost in cents per quantity unit, keyed by cost code.
     pub unit_costs: HashMap<String, Cents>,
 }
@@ -50,6 +54,7 @@ impl Project {
             levels: vec![],
             elements: vec![],
             spaces: vec![],
+            source_offset: None,
             unit_costs: HashMap::new(),
         }
     }

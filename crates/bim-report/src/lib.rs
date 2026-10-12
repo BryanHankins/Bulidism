@@ -183,16 +183,15 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
                 let mut adv = Vec::new();
                 // a rule file for another jurisdiction must not pass silently
                 if rs.id != project.rule_set {
-                    adv.push(bim_rules::Advisory {
-                        rule_id: "rule_set.mismatch".into(),
-                        cite: String::new(),
-                        severity: bim_rules::Severity::Warning,
-                        subject: project.name.clone(),
-                        message: format!(
+                    adv.push(bim_rules::Advisory::note(
+                        "rule_set.mismatch",
+                        bim_rules::Severity::Warning,
+                        project.name.clone(),
+                        format!(
                             "project specifies rule set '{}' but was evaluated against '{}'",
                             project.rule_set, rs.id
                         ),
-                    });
+                    ));
                 }
                 adv.extend(rs.evaluate(project));
                 adv
@@ -210,17 +209,16 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
         }
     }
     for (code, n) in unpriced {
-        advisories.push(bim_rules::Advisory {
-            rule_id: "cost.missing_rate".into(),
-            cite: String::new(),
-            severity: bim_rules::Severity::Info,
-            subject: if code.is_empty() {
+        advisories.push(bim_rules::Advisory::note(
+            "cost.missing_rate",
+            bim_rules::Severity::Info,
+            if code.is_empty() {
                 "(no cost code)".into()
             } else {
                 code.to_string()
             },
-            message: format!("{n} element(s) have no unit cost for this code; priced at $0"),
-        });
+            format!("{n} element(s) have no unit cost for this code; priced at $0"),
+        ));
     }
     let rules_checked = rules
         .map(|rs| {

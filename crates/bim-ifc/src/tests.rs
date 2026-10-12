@@ -56,6 +56,9 @@ fn fixture_imports_every_supported_kind() {
     let r = import(FIXTURE, "fallback").unwrap();
     let p = &r.project;
     assert_eq!(p.name, "Fixture Clinic");
+    // re-centring: the site sits at (100 m, 200 m); world x 100 m -> model 0 (shift -100), and
+    // world y max 204 m -> model z = -204 -> 0 (shift +204)
+    assert_eq!(p.source_offset, Some([-100.0, 0.0, 204.0]));
     assert!(p.validate().is_empty(), "{:?}", p.validate());
     assert_eq!(
         r.notes[0],

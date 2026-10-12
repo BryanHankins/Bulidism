@@ -11,7 +11,7 @@ const report = (over = {}) => ({
   clashes: [{ a: 'a', b: 'b', overlap_m3: 0.15 }],
   advisories: [
     { rule_id: 'door.min_height', cite: '§1010', severity: 'warning', subject: 'D1', message: 'short' },
-    { rule_id: 'egress', cite: '§1010.1.1', severity: 'error', subject: '<img onerror=x>', message: `2'-3" < 2'-8"` },
+    { rule_id: 'egress', cite: '§1010.1.1', severity: 'error', subject: '<img onerror=x>', message: `2'-3" < 2'-8"`, check: 'egress door clear width', measured: 0.686, limit: 0.813, bound: 'min', measure: 'length' },
   ],
   rules_checked: [
     { id: 'egress', cite: '§1010.1.1', severity: 'error', verified: '2026-09-27 ICC', findings: 1 },
@@ -31,6 +31,9 @@ test('errors first, units, totals, verification, sign-off', () => {
   const h = printHtml(report(), 'imperial', new Date(2026, 9, 12));
   assert.ok(h.indexOf('&#60;img') < h.indexOf('>D1<'), 'errors sorted before warnings');
   assert.ok(h.includes('1,033 sf') && h.includes('5.3 cf') && h.includes('$1,234.50'));
+  // structured findings: measured vs required in display units; plain notes fall back to the message
+  assert.ok(h.includes('<td>egress door clear width</td><td class="num">2&#39;-3&#34;</td><td class="num">≥ 2&#39;-8&#34;</td>'), h);
+  assert.ok(h.includes('<td>short</td><td class="num">—</td><td class="num">—</td>'));
   assert.ok(h.includes('No findings') && h.includes('class="unverified">secondary source only'));
   assert.ok(h.includes('not been reviewed by a licensed professional'));
   assert.ok(h.includes('October 12, 2026') && h.includes('License no.'));

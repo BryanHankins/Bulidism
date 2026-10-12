@@ -2,6 +2,7 @@
 import init, * as bim from './pkg/bim_wasm.js';
 import { printHtml } from './print.js';
 import { setLevelElevation } from './levels.js';
+import { buildBcf } from './bcf.js';
 import { costRows, perLabel, rateOut, rateIn, parseDollars, ratesToCsv, parseRatesCsv } from './costs.js';
 import { snapStep, lenToInput, parseLen, fmtArea, areaToInput, parseArea, qtyOut, convertMessage } from './units.js';
 
@@ -258,6 +259,18 @@ $('exportCsv').onclick = () => {
   const rows = [['element','cost_code','phase','start_day','qty','unit','cost_usd'].join(',')]
     .concat(lastReport.elements.map(e => { const [q, u] = qtyOut(e.qty, e.unit, units); return [csvField(e.name), csvField(e.cost_code), e.phase, e.start_day, q.toFixed(3), u, e.cost_usd.toFixed(2)].join(','); }));
   download(`${project.name.replace(/\W+/g,'_')}_takeoff.csv`, rows.join('\n'), 'text/csv');
+};
+// BCF: one issue per finding and clash, each with a framed snapshot from the live viewer
+$('exportBcf').onclick = () => {
+  if (!lastReport) return;
+  const bytes = url => Uint8Array.from(atob(url.split(',')[1]), c => c.charCodeAt(0));
+  const { zip, topics } = buildBcf(lastReport, project, {
+    views: t => { if (!t.focus) return null; const s = window.__viewer.snapshot(t.focus, t.components, t.type === 'Clash'); return { camera: s.camera, png: bytes(s.png) }; },
+  });
+  if (!topics.length) { status('No findings or clashes to export as BCF'); return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([zip], { type: 'application/zip' }));
+  a.download = `${project.name.replace(/\W+/g, '_')}_issues.bcfzip`; a.click();
+  status(`exported ${topics.length} BCF issue${topics.length === 1 ? '' : 's'}`);
 };
 $('printReport').onclick = () => {
   if (!lastReport) return;
