@@ -21,7 +21,7 @@ fn sample_report_golden() {
         "57 days total",
         "Advisories (2)",
         "Clashes (4)",
-        "TOTAL          $    30204.76",
+        "TOTAL          $    29442.46",
         "egress door clear width",
     ] {
         assert!(out.contains(needle), "missing {needle:?} in:\n{out}");
@@ -56,4 +56,33 @@ fn invalid_project_exits_nonzero() {
     std::fs::write(&bad, r#"{"schema_version":1,"name":"x","rule_set":"IN-2026","phases":[],"elements":[],"spaces":[{"name":"s","occupancy":"Business","floor_area_m2":10.0,"egress_doors":["00000000-0000-0000-0000-000000000000"]}],"unit_costs":{}}"#).unwrap();
     let (ok, _, err) = run(&[bad.to_str().unwrap()]);
     assert!(!ok && err.contains("validation error"), "{err}");
+}
+
+#[test]
+fn explicit_missing_rules_fails() {
+    let (ok, _, err) = run(&["--rules", "rules/NOPE.json"]);
+    assert!(!ok && err.contains("cannot load rules"), "{err}");
+}
+
+#[test]
+fn default_rules_follow_project_rule_set() {
+    let dir = std::env::temp_dir().join("bim-cli-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("ibc.json");
+    let src = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/sample_office.json"
+    ))
+    .unwrap()
+    .replace("\"IN-2026\"", "\"IBC-2024\"");
+    std::fs::write(&p, src).unwrap();
+    // no rules/IBC-2024.json ships: warn and skip, never silently apply IN-2026
+    let (ok, out, err) = run(&[p.to_str().unwrap()]);
+    assert!(ok, "{err}");
+    assert!(err.contains("rules/IBC-2024.json"), "{err}");
+    assert!(!out.contains("Advisories"), "{out}");
+    // forcing another jurisdiction's file is allowed but flagged
+    let (ok, out, err) = run(&[p.to_str().unwrap(), "--rules", "rules/IN-2026.json"]);
+    assert!(ok, "{err}");
+    assert!(out.contains("evaluated against 'IN-2026'"), "{out}");
 }

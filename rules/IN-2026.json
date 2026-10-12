@@ -11,7 +11,8 @@
       "severity": "error",
       "check": "egress_door_min_width",
       "min_clear_width_m": 0.813,
-      "verified": "2026-09-27 ICC codes.iccsafe.org IBC2024 \u00a71010.1.1 (32 in / 813 mm)"
+      "leaf_to_clear_deduction_m": 0.064,
+      "verified": "2026-09-27 ICC codes.iccsafe.org IBC2024 \u00a71010.1.1 (32 in / 813 mm); leaf-to-clear deduction 64 mm (2.5 in: stop + leaf thickness at 90\u00b0) is a typical-hardware estimate, not code text \u2014 unverified"
     },
     {
       "id": "door.min_height",

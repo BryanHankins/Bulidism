@@ -14,8 +14,12 @@ pub enum Severity {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "check", rename_all = "snake_case")]
 pub enum Check {
+    /// Doors are modelled by leaf width; clear width = leaf - `leaf_to_clear_deduction_m`
+    /// (stop + leaf thickness when open 90 degrees).
     EgressDoorMinWidth {
         min_clear_width_m: f32,
+        #[serde(default)]
+        leaf_to_clear_deduction_m: f32,
     },
     DoorMinHeight {
         min_height_m: f32,
@@ -88,6 +92,27 @@ pub enum RuleError {
     Parse(#[from] serde_json::Error),
 }
 
+/// Distinct referenced doors that are actually marked egress.
+pub fn egress_exits(p: &Project, s: &Space) -> usize {
+    let mut ids: Vec<ElementId> = s
+        .egress_doors
+        .iter()
+        .copied()
+        .filter(|d| {
+            matches!(
+                p.element(*d).map(|e| &e.kind),
+                Ok(ElementKind::Door {
+                    is_egress: true,
+                    ..
+                })
+            )
+        })
+        .collect();
+    ids.sort_by_key(|d| d.0);
+    ids.dedup();
+    ids.len()
+}
+
 impl RuleSet {
     pub fn from_json(s: &str) -> Result<Self, RuleError> {
         Ok(serde_json::from_str(s)?)
@@ -98,7 +123,10 @@ impl RuleSet {
         for r in &self.rules {
             let mut hits: Vec<(String, String)> = Vec::new();
             match &r.check {
-                Check::EgressDoorMinWidth { min_clear_width_m } => {
+                Check::EgressDoorMinWidth {
+                    min_clear_width_m,
+                    leaf_to_clear_deduction_m: ded,
+                } => {
                     for e in &p.elements {
                         if let ElementKind::Door {
                             width,
@@ -106,8 +134,9 @@ impl RuleSet {
                             ..
                         } = e.kind
                         {
-                            if width < *min_clear_width_m {
-                                hits.push((e.name.clone(), format!("egress door clear width {width:.3} m < {min_clear_width_m:.3} m")));
+                            let clear = width - ded;
+                            if clear < *min_clear_width_m {
+                                hits.push((e.name.clone(), format!("egress door clear width {clear:.3} m (leaf {width:.3} m - {ded:.3} m) < {min_clear_width_m:.3} m")));
                             }
                         }
                     }
@@ -230,8 +259,9 @@ impl RuleSet {
                 } => {
                     for s in p.spaces.iter().filter(|s| s.occupancy == *occupancy) {
                         let load = (s.area_m2() / area_per_occupant_m2).ceil() as u32;
-                        if load > *max_occupants_single_exit && s.egress_doors.len() < 2 {
-                            hits.push((s.name.clone(), format!("occupant load {load} > {max_occupants_single_exit} with {} exit(s)", s.egress_doors.len())));
+                        let exits = egress_exits(p, s);
+                        if load > *max_occupants_single_exit && exits < 2 {
+                            hits.push((s.name.clone(), format!("occupant load {load} > {max_occupants_single_exit} with {exits} exit(s)")));
                         }
                     }
                 }
@@ -264,6 +294,61 @@ mod tests {
                 .any(|a| a.rule_id == "egress.door.min_clear_width"),
             "{adv:?}"
         );
+    }
+    #[test]
+    fn clear_width_deducts_from_leaf() {
+        let rs = RuleSet::from_json(RS).unwrap();
+        let mut p = Project::sample();
+        let set_rear = |p: &mut Project, w: f32| {
+            for e in &mut p.elements {
+                if let ElementKind::Door { width, .. } = &mut e.kind {
+                    if e.name == "Rear exit" {
+                        *width = w;
+                    }
+                }
+            }
+        };
+        let flagged = |p: &Project| {
+            rs.evaluate(p)
+                .iter()
+                .any(|a| a.subject == "Rear exit" && a.rule_id == "egress.door.min_clear_width")
+        };
+        // a 0.84 m leaf passes on nominal width but not after the stop/leaf deduction
+        set_rear(&mut p, 0.84);
+        assert!(flagged(&p));
+        set_rear(&mut p, 0.9);
+        assert!(!flagged(&p));
+    }
+    #[test]
+    fn duplicate_or_non_egress_exits_do_not_count() {
+        let rs = RuleSet::from_json(RS).unwrap();
+        let mut p = Project::sample();
+        p.spaces[0].bounds = None;
+        p.spaces[0].floor_area_m2 = 1000.0; // load 72 > 49
+        let flagged = |p: &Project| {
+            rs.evaluate(p)
+                .iter()
+                .any(|a| a.rule_id.starts_with("occupant_load"))
+        };
+        assert!(!flagged(&p));
+        let d0 = p.spaces[0].egress_doors[0];
+        p.spaces[0].egress_doors = vec![d0, d0];
+        assert!(flagged(&p), "same door twice is one exit");
+        let d1 = p
+            .elements
+            .iter()
+            .find(|e| e.name == "Rear exit")
+            .unwrap()
+            .id;
+        p.spaces[0].egress_doors = vec![d0, d1];
+        for e in &mut p.elements {
+            if let ElementKind::Door { is_egress, .. } = &mut e.kind {
+                if e.id == d1 {
+                    *is_egress = false;
+                }
+            }
+        }
+        assert!(flagged(&p), "non-egress door is not an exit");
     }
     #[test]
     fn unknown_field_rejected() {

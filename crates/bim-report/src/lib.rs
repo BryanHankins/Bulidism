@@ -69,6 +69,8 @@ pub struct Report {
     pub code_edition: String,
     pub rules_verified: String,
     pub total_days: u32,
+    /// Exact sum of element costs (summed in cents, then converted).
+    pub total_cost_usd: f64,
     pub phases: Vec<PhaseOut>,
     pub elements: Vec<ElementOut>,
     pub clashes: Vec<ClashOut>,
@@ -127,17 +129,12 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
     }
     let clashes = bim_geom::clashes(project, CLASH_TOLERANCE_M3)
         .into_iter()
-        .filter_map(|c| {
-            let a = bim_geom::aabb(project, project.element(c.a).ok()?).ok()?;
-            let b = bim_geom::aabb(project, project.element(c.b).ok()?).ok()?;
-            let o = a.intersection(&b);
-            Some(ClashOut {
-                a: c.a,
-                b: c.b,
-                min: o.min.to_array(),
-                max: o.max.to_array(),
-                overlap_m3: c.overlap_m3,
-            })
+        .map(|c| ClashOut {
+            a: c.a,
+            b: c.b,
+            min: c.region.min.to_array(),
+            max: c.region.max.to_array(),
+            overlap_m3: c.overlap_m3,
         })
         .collect();
     let (rule_set, code_edition, rules_verified, advisories) = match rules {
@@ -145,10 +142,40 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
             rs.id.clone(),
             rs.code_edition.clone(),
             rs.verified.clone(),
-            rs.evaluate(project),
+            {
+                let mut adv = Vec::new();
+                // a rule file for another jurisdiction must not pass silently
+                if rs.id != project.rule_set {
+                    adv.push(bim_rules::Advisory {
+                        rule_id: "rule_set.mismatch".into(),
+                        cite: String::new(),
+                        severity: bim_rules::Severity::Warning,
+                        subject: project.name.clone(),
+                        message: format!(
+                            "project specifies rule set '{}' but was evaluated against '{}'",
+                            project.rule_set, rs.id
+                        ),
+                    });
+                }
+                adv.extend(rs.evaluate(project));
+                adv
+            },
         ),
         None => ("none".into(), "no rule file".into(), "n/a".into(), vec![]),
     };
+    let mut advisories = advisories;
+    // an unpriced cost code silently totals $0; surface it
+    for e in &project.elements {
+        if !project.unit_costs.contains_key(&e.cost_code) {
+            advisories.push(bim_rules::Advisory {
+                rule_id: "cost.missing_rate".into(),
+                cite: String::new(),
+                severity: bim_rules::Severity::Info,
+                subject: e.name.clone(),
+                message: format!("no unit cost for cost code '{}'; priced at $0", e.cost_code),
+            });
+        }
+    }
     let spaces = project
         .spaces
         .iter()
@@ -156,7 +183,7 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
             name: s.name.clone(),
             occupancy: format!("{:?}", s.occupancy),
             area_m2: s.area_m2(),
-            exits: s.egress_doors.len(),
+            exits: bim_rules::egress_exits(project, s),
             bounds: s.bounds,
         })
         .collect();
@@ -167,6 +194,7 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
         code_edition,
         rules_verified,
         total_days: schedule.total_days,
+        total_cost_usd: lines.iter().map(|l| l.cost).sum::<Cents>().dollars(),
         phases,
         elements,
         clashes,
@@ -199,7 +227,8 @@ mod tests {
         assert_eq!(r.spaces.len(), 1);
         assert_eq!(r.spaces[0].exits, 2);
         assert_eq!(r.spaces[0].area_m2, 96.0);
-        assert!((r.phases.iter().map(|p| p.cost_usd).sum::<f64>() - 30204.76).abs() < 1e-6);
+        // walls are net of door openings
+        assert!((r.phases.iter().map(|p| p.cost_usd).sum::<f64>() - 29442.46).abs() < 1e-6);
     }
     #[test]
     fn json_round_trip_matches_struct() {
@@ -208,6 +237,29 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
         assert_eq!(v["total_days"], 57);
         assert_eq!(v["elements"].as_array().unwrap().len(), 12);
+    }
+    #[test]
+    fn rule_set_mismatch_is_flagged() {
+        let rs = bim_rules::RuleSet::from_json(RS).unwrap();
+        let mut p = Project::sample();
+        let ok = build(&p, Some(&rs)).unwrap();
+        assert!(!ok
+            .advisories
+            .iter()
+            .any(|a| a.rule_id == "rule_set.mismatch"));
+        assert!((ok.total_cost_usd - 29442.46).abs() < 1e-6);
+        p.rule_set = "IBC-2024".into();
+        let r = build(&p, Some(&rs)).unwrap();
+        assert_eq!(r.advisories[0].rule_id, "rule_set.mismatch");
+        assert_eq!(r.advisories.len(), ok.advisories.len() + 1);
+    }
+    #[test]
+    fn unpriced_cost_code_is_flagged() {
+        let mut p = Project::sample();
+        p.elements[0].cost_code = "Z9999".into();
+        let r = build(&p, None).unwrap();
+        assert_eq!(r.advisories.len(), 1);
+        assert_eq!(r.advisories[0].rule_id, "cost.missing_rate");
     }
     #[test]
     fn invalid_project_is_error() {

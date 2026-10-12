@@ -8,6 +8,8 @@ pub enum ScheduleError {
     Cycle(PhaseId),
     #[error("phase {0:?} depends on unknown phase {1:?}")]
     UnknownDependency(PhaseId, PhaseId),
+    #[error("duplicate phase id {0:?}")]
+    DuplicatePhase(PhaseId),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -30,24 +32,32 @@ impl Schedule {
     }
     /// Phase has started by day t (its elements become visible).
     pub fn is_started(&self, id: PhaseId, t: u32) -> bool {
-        self.phase(id).map_or(false, |p| t >= p.start_day)
+        self.phase(id).is_some_and(|p| t >= p.start_day)
     }
     pub fn is_complete(&self, id: PhaseId, t: u32) -> bool {
-        self.phase(id).map_or(false, |p| t >= p.end_day)
+        self.phase(id).is_some_and(|p| t >= p.end_day)
     }
     /// Day an element appears: phase start + its offset, clamped to the phase end.
     pub fn element_start_day(&self, e: &Element) -> Option<u32> {
-        self.phase(e.phase)
-            .map(|p| (p.start_day + e.start_offset_days).min(p.end_day))
+        self.phase(e.phase).map(|p| {
+            p.start_day
+                .saturating_add(e.start_offset_days)
+                .min(p.end_day)
+        })
     }
     pub fn element_visible(&self, e: &Element, t: u32) -> bool {
-        self.element_start_day(e).map_or(false, |d| t >= d)
+        self.element_start_day(e).is_some_and(|d| t >= d)
     }
 }
 
 /// Kahn topological order over phase ids; error names one node on a cycle.
 fn topo_order(phases: &[Phase]) -> Result<Vec<usize>, ScheduleError> {
-    let idx: HashMap<PhaseId, usize> = phases.iter().enumerate().map(|(i, p)| (p.id, i)).collect();
+    let mut idx: HashMap<PhaseId, usize> = HashMap::new();
+    for (i, p) in phases.iter().enumerate() {
+        if idx.insert(p.id, i).is_some() {
+            return Err(ScheduleError::DuplicatePhase(p.id));
+        }
+    }
     let mut indeg = vec![0usize; phases.len()];
     let mut succ: Vec<Vec<usize>> = vec![Vec::new(); phases.len()];
     for (i, p) in phases.iter().enumerate() {
@@ -177,6 +187,20 @@ mod tests {
         let beam = p.elements.iter().find(|e| e.name == "Roof beam").unwrap();
         assert_eq!(s.element_start_day(beam), Some(18));
         assert!(!s.element_visible(beam, 17) && s.element_visible(beam, 18));
+    }
+    #[test]
+    fn duplicate_phase_rejected() {
+        assert!(matches!(
+            schedule(&[ph(0, 1, &[]), ph(0, 2, &[])]),
+            Err(ScheduleError::DuplicatePhase(PhaseId(0)))
+        ));
+    }
+    #[test]
+    fn huge_offset_saturates() {
+        let mut p = Project::sample();
+        let s = schedule(&p.phases).unwrap();
+        p.elements[0].start_offset_days = u32::MAX;
+        assert_eq!(s.element_start_day(&p.elements[0]), Some(10));
     }
     #[test]
     fn empty_ok() {

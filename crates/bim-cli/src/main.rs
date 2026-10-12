@@ -1,5 +1,5 @@
-//! Headless pipeline: validate -> schedule -> advisories -> clashes -> takeoff.
-//! Usage: bim-cli [project.json] [--rules rules/IN-2026.json] [--csv out.csv] [--html report.html] [--sample-out sample.json]
+//! Headless pipeline: runs bim_report::build (validate -> schedule -> advisories -> clashes -> takeoff).
+//! Usage: bim-cli [project.json] [--rules rules/<project rule_set>.json] [--csv out.csv] [--html report.html] [--sample-out sample.json]
 //! --html writes a self-contained 4D viewer (three.js inlined) with all geometry, schedule,
 //! cost, clash and advisory data computed here in Rust — the hybrid render path from the plan.
 use std::{env, fs, process::ExitCode};
@@ -24,8 +24,6 @@ fn main() -> ExitCode {
         .enumerate()
         .find(|(i, a)| !a.starts_with("--") && (*i == 0 || !args[i - 1].starts_with("--")))
         .map(|(_, a)| a.clone());
-    let rules_path = flag("--rules").unwrap_or_else(|| "rules/IN-2026.json".into());
-
     let project = match project_path.as_deref() {
         Some(p) => match fs::read_to_string(p)
             .map_err(|e| e.to_string())
@@ -53,86 +51,87 @@ fn main() -> ExitCode {
         }
     }
 
-    let problems = project.validate();
-    if !problems.is_empty() {
-        eprintln!("project has {} validation error(s):", problems.len());
-        for p in &problems {
-            eprintln!("  - {p}");
-        }
-        return ExitCode::FAILURE;
-    }
-
-    println!("== {} (rule set {}) ==", project.name, project.rule_set);
-    let schedule = match bim_schedule::schedule(&project.phases) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("schedule error: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    println!(
-        "\nSchedule: {} days total (* = critical)",
-        schedule.total_days
-    );
-    for sp in &schedule.phases {
-        let name = project.phase(sp.id).map(|p| p.name.as_str()).unwrap_or("?");
-        println!(
-            "  {}{:<14} day {:>3} - {:>3}",
-            if sp.critical { "*" } else { " " },
-            name,
-            sp.start_day,
-            sp.end_day
-        );
-    }
-
-    let mut rule_set: Option<bim_rules::RuleSet> = None;
-    match fs::read_to_string(rules_path)
+    // explicit --rules must load; the default follows the project's own rule set
+    let explicit_rules = flag("--rules");
+    let rules_path = explicit_rules
+        .clone()
+        .unwrap_or_else(|| format!("rules/{}.json", project.rule_set));
+    let rule_set = match fs::read_to_string(&rules_path)
         .map_err(|e| e.to_string())
         .and_then(|s| bim_rules::RuleSet::from_json(&s).map_err(|e| e.to_string()))
     {
-        Ok(rs) => {
-            let adv = rs.evaluate(&project);
-
-            println!("\nAdvisories ({}) — {} [{}] verified: {} — ADVISORY ONLY, not a compliance determination", adv.len(), rs.id, rs.code_edition, rs.verified);
-            for a in &adv {
-                println!(
-                    "  [{:?}] {}: {} ({})",
-                    a.severity, a.subject, a.message, a.cite
-                );
-            }
-            rule_set = Some(rs);
+        Ok(rs) => Some(rs),
+        Err(e) if explicit_rules.is_some() => {
+            eprintln!("error: cannot load rules {rules_path}: {e}");
+            return ExitCode::FAILURE;
         }
-        Err(e) => eprintln!("\nrules: skipped ({e})"),
+        Err(e) => {
+            eprintln!("warning: no advisories — cannot load rules {rules_path}: {e}");
+            None
+        }
+    };
+
+    // the one shared pipeline (same as the wasm build)
+    let report = match bim_report::build(&project, rule_set.as_ref()) {
+        Ok(r) => r,
+        Err(bim_report::ReportError::Invalid(problems)) => {
+            eprintln!("project has {} validation error(s):", problems.len());
+            for p in &problems {
+                eprintln!("  - {p}");
+            }
+            return ExitCode::FAILURE;
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    println!("== {} (rule set {}) ==", project.name, project.rule_set);
+    println!(
+        "\nSchedule: {} days total (* = critical)",
+        report.total_days
+    );
+    for ph in &report.phases {
+        println!(
+            "  {}{:<14} day {:>3} - {:>3}",
+            if ph.critical { "*" } else { " " },
+            ph.name,
+            ph.start_day,
+            ph.end_day
+        );
     }
 
-    let clashes = bim_geom::clashes(&project, 0.001);
+    if rule_set.is_some() || !report.advisories.is_empty() {
+        println!("\nAdvisories ({}) — {} [{}] verified: {} — ADVISORY ONLY, not a compliance determination", report.advisories.len(), report.rule_set, report.code_edition, report.rules_verified);
+        for a in &report.advisories {
+            println!(
+                "  [{:?}] {}: {} ({})",
+                a.severity, a.subject, a.message, a.cite
+            );
+        }
+    }
+
     println!(
-        "\nClashes ({}) — cross-discipline AABB overlap > 0.001 m3",
-        clashes.len()
+        "\nClashes ({}) — cross-discipline overlap > {} m3",
+        report.clashes.len(),
+        bim_report::CLASH_TOLERANCE_M3
     );
-    for c in &clashes {
+    for c in &report.clashes {
         let n = |id| project.element(id).map(|e| e.name.as_str()).unwrap_or("?");
         println!("  {} <-> {} : {:.3} m3", n(c.a), n(c.b), c.overlap_m3);
     }
 
-    let lines = bim_takeoff::takeoff(&project);
     println!("\nCost by phase");
-    let mut total = bim_core::Cents(0);
-    for (ph, c) in bim_takeoff::cost_by_phase(&lines) {
-        let name = project.phase(ph).map(|p| p.name.as_str()).unwrap_or("?");
-        println!("  {:<14} ${:>12.2}", name, c.dollars());
-        total = total + c;
+    for ph in &report.phases {
+        println!("  {:<14} ${:>12.2}", ph.name, ph.cost_usd);
     }
-    println!("  {:<14} ${:>12.2}", "TOTAL", total.dollars());
+    println!("  {:<14} ${:>12.2}", "TOTAL", report.total_cost_usd);
     if let Some(html) = flag("--html") {
-        match render_html(&project, rule_set.as_ref()) {
-            Ok(page) => {
-                if let Err(e) = fs::write(&html, page) {
-                    eprintln!("html: {e}");
-                    return ExitCode::FAILURE;
-                }
-                println!("wrote {html}");
-            }
+        match render_html(&report)
+            .and_then(|page| fs::write(&html, page).map_err(|e| e.to_string()))
+        {
+            Ok(()) => println!("wrote {html}"),
             Err(e) => {
                 eprintln!("html: {e}");
                 return ExitCode::FAILURE;
@@ -140,6 +139,7 @@ fn main() -> ExitCode {
         }
     }
     if let Some(csv) = flag("--csv") {
+        let lines = bim_takeoff::takeoff(&project);
         if let Err(e) = fs::write(&csv, bim_takeoff::to_csv(&lines)) {
             eprintln!("csv: {e}");
             return ExitCode::FAILURE;
@@ -150,14 +150,11 @@ fn main() -> ExitCode {
 }
 
 /// Static report page: the same viewer.js the live app uses, with data pre-computed here.
-fn render_html(
-    project: &bim_core::Project,
-    rules: Option<&bim_rules::RuleSet>,
-) -> Result<String, String> {
-    let report = bim_report::build(project, rules).map_err(|e| e.to_string())?;
-    let json = serde_json::to_string(&report)
+fn render_html(report: &bim_report::Report) -> Result<String, String> {
+    let json = serde_json::to_string(report)
         .map_err(|e| e.to_string())?
-        .replace("</", "<\\/");
+        // inside <script>, '<' must never appear raw (covers </script and <!--)
+        .replace('<', "\\u003c");
     Ok(VIEWER_HTML
         .replacen("/*__CSS__*/", VIEWER_CSS, 1)
         .replacen("/*__THREE__*/", THREE_JS, 1)
