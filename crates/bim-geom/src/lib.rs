@@ -136,7 +136,7 @@ pub fn box_mesh(b: &Aabb) -> Mesh {
     for (i, (nrm, quad)) in faces.iter().enumerate() {
         let base = (i * 4) as u32;
         m.positions.extend_from_slice(quad);
-        m.normals.extend(std::iter::repeat(*nrm).take(4));
+        m.normals.extend_from_slice(&[*nrm; 4]);
         m.indices
             .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
@@ -186,7 +186,7 @@ fn wedge_mesh(base: Vec3, run: f32, rise: f32, width: f32) -> Mesh {
     let mut face = |verts: &[Vec3], n: Vec3| {
         let base = m.positions.len() as u32;
         m.positions.extend_from_slice(verts);
-        m.normals.extend(std::iter::repeat(n).take(verts.len()));
+        m.normals.resize(m.normals.len() + verts.len(), n);
         for k in 1..verts.len() as u32 - 1 {
             m.indices.extend_from_slice(&[base, base + k, base + k + 1]);
         }

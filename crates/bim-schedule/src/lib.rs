@@ -30,10 +30,10 @@ impl Schedule {
     }
     /// Phase has started by day t (its elements become visible).
     pub fn is_started(&self, id: PhaseId, t: u32) -> bool {
-        self.phase(id).map_or(false, |p| t >= p.start_day)
+        self.phase(id).is_some_and(|p| t >= p.start_day)
     }
     pub fn is_complete(&self, id: PhaseId, t: u32) -> bool {
-        self.phase(id).map_or(false, |p| t >= p.end_day)
+        self.phase(id).is_some_and(|p| t >= p.end_day)
     }
     /// Day an element appears: phase start + its offset, clamped to the phase end.
     pub fn element_start_day(&self, e: &Element) -> Option<u32> {
@@ -41,7 +41,7 @@ impl Schedule {
             .map(|p| (p.start_day + e.start_offset_days).min(p.end_day))
     }
     pub fn element_visible(&self, e: &Element, t: u32) -> bool {
-        self.element_start_day(e).map_or(false, |d| t >= d)
+        self.element_start_day(e).is_some_and(|d| t >= d)
     }
 }
 
