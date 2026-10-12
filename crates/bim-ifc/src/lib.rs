@@ -777,6 +777,8 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
         .unwrap_or(fallback_name)
         .to_string();
     let mut p = Project::new(name, "IN-2026");
+    // model = IFC-in-model-axes + shift; recorded so exports can map back to IFC coordinates
+    p.source_offset = Some(shift.to_array());
     p.phases = vec![
         Phase {
             id: STRUCTURE,

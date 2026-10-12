@@ -50,6 +50,14 @@ export const fmtVol = (m3, sys) => sys === 'imperial' ? `${(m3 / (M_PER_FT ** 3)
 export const areaToInput = (m2, sys) => sys === 'imperial' ? String(Math.round(m2 / M2_PER_SF)) : String(+(+m2).toFixed(2));
 export const parseArea = (s, sys) => { const v = /^\s*(\d+\.?\d*|\.\d+)\s*$/.test(s) ? +s : NaN; return sys === 'imperial' ? v * M2_PER_SF : v; };
 
+/** A finding's measured value or limit in display units (Length / Ratio / Count). */
+export function fmtMeasure(v, measure, sys) {
+  if (v == null) return '—';
+  if (measure === 'length') return fmtLen(v, sys);
+  if (measure === 'ratio') return `1:${(+v).toFixed(1)}`;
+  return String(Math.round(v));
+}
+
 /** Takeoff quantity in display units: m2→SF, m3→CY, m→LF (costs stay as computed). */
 export function qtyOut(qty, unit, sys) {
   if (sys !== 'imperial') return [qty, unit];

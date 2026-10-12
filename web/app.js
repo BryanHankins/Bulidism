@@ -2,8 +2,9 @@
 import init, * as bim from './pkg/bim_wasm.js';
 import { printHtml } from './print.js';
 import { setLevelElevation } from './levels.js';
+import { buildBcf } from './bcf.js';
 import { costRows, perLabel, rateOut, rateIn, parseDollars, ratesToCsv, parseRatesCsv } from './costs.js';
-import { snapStep, lenToInput, parseLen, fmtArea, areaToInput, parseArea, qtyOut, convertMessage } from './units.js';
+import { snapStep, lenToInput, parseLen, fmtLen, fmtArea, areaToInput, parseArea, qtyOut, convertMessage } from './units.js';
 
 const $ = id => document.getElementById(id);
 // user-supplied strings (names, cost codes) go into innerHTML: always escape
@@ -85,13 +86,15 @@ function rerun(keepDay = true) {
     $('spaceList').innerHTML = report.spaces.length
       ? report.spaces.map(s => `<div class="row"><span>${esc(s.name)} <small style="color:var(--muted)">${s.occupancy}</small></span><span>${fmtArea(s.area_m2, units)} · ${s.exits} exit${s.exits===1?'':'s'}</span></div>`).join('')
       : '<div class="row"><span>No spaces defined</span></div>';
+    renderCodeSummary(report.code_summary);
+    renderReadiness(report.readiness || []);
     renderReport(report, { day: keepDay ? Math.min(lastDay, report.total_days) : 0, selected: selectedId, onClick: onViewClick, onMove: onViewMove, onHandle: onViewHandle, handlesFor, onDay: d => lastDay = d, level: lastLevel, onLevel: l => lastLevel = l, groundY: lvlY() });
     status(`ran in ${(performance.now()-t0).toFixed(1)} ms · schema v${bim.schema_version()}${rules ? '' : ` · no rule file for '${project.rule_set}', advisories skipped`}${notice}`);
     notice = '';
   } catch (e) {
     $('runErr').textContent = String(e);
   }
-  renderEditor(); renderProps(); renderSpaces(); renderCosts(); renderLevels(); $('jsonBox').value = JSON.stringify(project, null, 2);
+  renderEditor(); renderProps(); renderSpaces(); renderCosts(); renderLevels(); renderBuilding(); $('jsonBox').value = JSON.stringify(project, null, 2);
   autosave();
 }
 
@@ -259,6 +262,18 @@ $('exportCsv').onclick = () => {
     .concat(lastReport.elements.map(e => { const [q, u] = qtyOut(e.qty, e.unit, units); return [csvField(e.name), csvField(e.cost_code), e.phase, e.start_day, q.toFixed(3), u, e.cost_usd.toFixed(2)].join(','); }));
   download(`${project.name.replace(/\W+/g,'_')}_takeoff.csv`, rows.join('\n'), 'text/csv');
 };
+// BCF: one issue per finding and clash, each with a framed snapshot from the live viewer
+$('exportBcf').onclick = () => {
+  if (!lastReport) return;
+  const bytes = url => Uint8Array.from(atob(url.split(',')[1]), c => c.charCodeAt(0));
+  const { zip, topics } = buildBcf(lastReport, project, {
+    views: t => { if (!t.focus) return null; const s = window.__viewer.snapshot(t.focus, t.components, t.type === 'Clash'); return { camera: s.camera, png: bytes(s.png) }; },
+  });
+  if (!topics.length) { status('No findings or clashes to export as BCF'); return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([zip], { type: 'application/zip' }));
+  a.download = `${project.name.replace(/\W+/g, '_')}_issues.bcfzip`; a.click();
+  status(`exported ${topics.length} BCF issue${topics.length === 1 ? '' : 's'}`);
+};
 $('printReport').onclick = () => {
   if (!lastReport) return;
   const w = window.open('', '_blank');
@@ -306,6 +321,36 @@ function onViewClick({ id, point, ground }) {
   selectedId = id; window.__viewer.highlight(id); renderProps(); if (id) selectTab('edit');
 }
 
+
+// ---- model readiness: what the checks need but the model lacks ----
+function renderReadiness(items) {
+  const warn = items.filter(i => i.severity === 'warning').length;
+  $('readiness').innerHTML = items.length ? `<details class="disclaimer" ${warn ? 'open' : ''} style="margin-bottom:10px"><summary><b>Model readiness:</b> ${warn} warning${warn === 1 ? '' : 's'}, ${items.length - warn} note${items.length - warn === 1 ? '' : 's'}</summary>` +
+    `<ul style="margin:6px 0 0;padding-left:18px">${items.map(i => `<li${i.severity === 'warning' ? ' style="color:var(--err)"' : ''}>${i.count ? i.count + ' ' : ''}${esc(i.message)}${i.examples.length ? ` <small style="color:var(--muted)">(${i.examples.map(esc).join(', ')}${i.count > i.examples.length ? ', …' : ''})</small>` : ''}</li>`).join('')}</ul></details>` : '';
+}
+
+// ---- code analysis (report pane) and building facts (editor) ----
+function renderCodeSummary(c) {
+  if (!c) { $('codeSummary').innerHTML = '<div class="row"><span>No code analysis parameters in this rule set</span></div>'; return; }
+  const mark = (prov, req) => prov + 1e-6 >= req ? '✓' : '<b style="color:var(--err)">✗</b>';
+  $('codeSummary').innerHTML = `<div class="row"><span>Total occupant load</span><span>${c.total_occupant_load}</span></div>` +
+    c.levels.map(l => `<div class="row"><span>${esc(l.name)} <small style="color:var(--muted)">${l.occupant_load} occ.</small></span>` +
+      `<span>exits ${l.exits_provided}/${l.exits_required} ${l.occupant_load ? mark(l.exits_provided, l.exits_required) : ''} · doors ${fmtLen(l.door_width_provided_m, units)} ${mark(l.door_width_provided_m, l.door_width_required_m)}` +
+      `${l.stair_width_required_m == null ? '' : ` · stairs ${mark(l.stair_width_provided_m, l.stair_width_required_m)}`}</span></div>`).join('') +
+    (c.plumbing.length ? `<div class="row"><span>Plumbing</span><span>${c.plumbing.map(p => `${p.required} ${esc(p.fixture.toLowerCase())}`).join(', ')}</span></div>` : '') +
+    `<div class="row"><small style="color:var(--muted)">Print for the full sheet. Parameters: secondary sources, unverified.</small></div>`;
+}
+const CONSTRUCTION_TYPES = ['IA', 'IB', 'IIA', 'IIB', 'IIIA', 'IIIB', 'IV-A', 'IV-B', 'IV-C', 'IV-HT', 'VA', 'VB'];
+function renderBuilding() {
+  const b = project.building || {};
+  $('buildingEdit').innerHTML = `<label class="chk">Construction type <select id="bType"><option value="">(not set)</option>${CONSTRUCTION_TYPES.map(t => `<option ${t === b.construction_type ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+    <label class="chk"><input type="checkbox" id="bSprinklered" ${b.sprinklered ? 'checked' : ''}> Sprinklered throughout</label>
+    <label class="chk"><input type="checkbox" id="bVoice" ${b.voice_alarm ? 'checked' : ''}> Emergency voice/alarm system</label>`;
+  const set = (k, v) => { snapshot(); project.building = { ...(project.building || {}), [k]: v }; rerun(); };
+  $('bType').onchange = e => set('construction_type', e.target.value || null);
+  $('bSprinklered').onchange = e => set('sprinklered', e.target.checked);
+  $('bVoice').onchange = e => set('voice_alarm', e.target.checked);
+}
 
 function renderLevels() {
   const ls = sortedLevels(), cur = currentLevel();

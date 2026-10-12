@@ -15,6 +15,20 @@ impl Default for ElementId {
     }
 }
 
+/// Building-wide facts the code analysis needs and the model cannot infer.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BuildingInfo {
+    /// IBC construction type, e.g. "IIB" (recorded and reported; allowable area/height not evaluated).
+    #[serde(default)]
+    pub construction_type: Option<String>,
+    /// Automatic sprinkler system throughout (NFPA 13 / 13R).
+    #[serde(default)]
+    pub sprinklered: bool,
+    /// Emergency voice/alarm communication system.
+    #[serde(default)]
+    pub voice_alarm: bool,
+}
+
 /// Building storey (IfcBuildingStorey).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct LevelId(pub u32);
