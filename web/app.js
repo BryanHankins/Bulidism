@@ -203,11 +203,11 @@ function onViewClick({ id, point, ground }) {
     project.elements.push(e); selectedId = e.id; setPlacing(null); rerun(); return;
   }
   if (placing && ground) {
-    snapshot();
     const [x, z] = [snap(ground[0]), snap(ground[1])];
-    if (placing === 'column') { const e = newEl(`Column ${project.elements.length+1}`, { Column: { base:[x,0.2,z], width:0.4, depth:0.4, height:3.2 } }, 'Structural', 'B1010'); project.elements.push(e); selectedId = e.id; rerun(); return; }
+    if (placing === 'column') { snapshot(); const e = newEl(`Column ${project.elements.length+1}`, { Column: { base:[x,0.2,z], width:0.4, depth:0.4, height:3.2 } }, 'Structural', 'B1010'); project.elements.push(e); selectedId = e.id; rerun(); return; }
     if (!placeStart) { placeStart = [x, z]; window.__viewer.setMarker(placeStart); $('placeMsg').textContent = 'click end point (Esc cancels)'; return; }
     if (Math.hypot(x - placeStart[0], z - placeStart[1]) < SNAP) return;
+    snapshot();
     const e = newEl(`Wall ${project.elements.length+1}`, { Wall: { start:[placeStart[0],0.2,placeStart[1]], end:[x,0.2,z], height:3.0, thickness:0.25 } }, 'Architectural', 'B2010');
     project.elements.push(e); selectedId = e.id; setPlacing(null); rerun(); return;
   }
@@ -253,7 +253,7 @@ $('apply').onclick = () => { try { const p = JSON.parse($('jsonBox').value); con
 $('jsonBox').oninput = () => { try { $('jsonMsg').textContent = JSON.parse(bim.validate($('jsonBox').value)).join('\n'); } catch (e) { $('jsonMsg').textContent = String(e); } };
 $('save').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' })); a.download = `${project.name.replace(/\W+/g,'_')}.json`; a.click(); };
 $('open').onclick = () => $('file').click();
-$('file').onchange = async ev => { const f = ev.target.files[0]; if (!f) return; try { const p = JSON.parse(await f.text()); const v = JSON.parse(bim.validate(JSON.stringify(p))); if (v.length) throw new Error(v.join('\n')); project = p; rerun(false); } catch (e) { $('runErr').textContent = String(e); } ev.target.value = ''; };
+$('file').onchange = async ev => { const f = ev.target.files[0]; if (!f) return; try { const p = JSON.parse(await f.text()); const v = JSON.parse(bim.validate(JSON.stringify(p))); if (v.length) throw new Error(v.join('\n')); snapshot(); project = p; selectedId = null; rerun(false); } catch (e) { $('runErr').textContent = String(e); } ev.target.value = ''; };
 $('new').onclick = () => { const name = prompt('Project name', 'New project'); if (!name) return; snapshot(); project = JSON.parse(bim.new_project(name, 'IN-2026')); rerun(false); };
 document.querySelectorAll('.tabs .btn').forEach(b => b.onclick = () => selectTab(b.dataset.tab));
 

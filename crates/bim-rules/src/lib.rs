@@ -15,10 +15,11 @@ pub enum Severity {
 #[serde(tag = "check", rename_all = "snake_case")]
 pub enum Check {
     /// Doors are modelled by leaf width; clear width = leaf - `leaf_to_clear_deduction_m`
-    /// (stop + leaf thickness when open 90 degrees).
+    /// (stop + leaf thickness when open 90 degrees). Required, not defaulted: rule
+    /// fields can't deny unknown keys (flatten), so a misspelt optional key would
+    /// silently become 0.
     EgressDoorMinWidth {
         min_clear_width_m: f32,
-        #[serde(default)]
         leaf_to_clear_deduction_m: f32,
     },
     DoorMinHeight {
@@ -349,6 +350,11 @@ mod tests {
             }
         }
         assert!(flagged(&p), "non-egress door is not an exit");
+    }
+    #[test]
+    fn misspelt_deduction_is_rejected() {
+        let bad = RS.replace("leaf_to_clear_deduction_m", "leaf_to_clear_deduction");
+        assert!(RuleSet::from_json(&bad).is_err());
     }
     #[test]
     fn unknown_field_rejected() {

@@ -16,6 +16,8 @@ pub enum ReportError {
     Rules(#[from] bim_rules::RuleError),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("geometry: {0}")]
+    Geom(#[from] bim_geom::GeomError),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -108,8 +110,12 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
         .collect();
     let mut elements = Vec::with_capacity(project.elements.len());
     for e in &project.elements {
-        let Ok(m) = bim_geom::mesh_for(project, e) else {
-            continue;
+        // external-mesh elements have no parametric geometry but are still
+        // scheduled and costed: keep them, with an empty mesh
+        let m = match bim_geom::mesh_for(project, e) {
+            Ok(m) => m,
+            Err(bim_geom::GeomError::NoGeometry(_)) => bim_geom::Mesh::default(),
+            Err(err) => return Err(err.into()),
         };
         let line = lines.iter().find(|l| l.element == e.id);
         elements.push(ElementOut {
@@ -252,6 +258,28 @@ mod tests {
         let r = build(&p, Some(&rs)).unwrap();
         assert_eq!(r.advisories[0].rule_id, "rule_set.mismatch");
         assert_eq!(r.advisories.len(), ok.advisories.len() + 1);
+    }
+    #[test]
+    fn external_mesh_element_is_kept_and_costed() {
+        let mut p = Project::sample();
+        let mut e = Element::new(
+            "AHU",
+            ElementKind::Mesh {
+                asset: "ahu.glb".into(),
+                origin: Default::default(),
+            },
+            Discipline::Mechanical,
+            PhaseId(3),
+        );
+        e.cost_code = "D3040".into();
+        p.add(e);
+        p.unit_costs.insert("D3040".into(), Cents(500_000));
+        let r = build(&p, None).unwrap();
+        let ahu = r.elements.iter().find(|e| e.name == "AHU").unwrap();
+        assert!(ahu.positions.is_empty() && ahu.indices.is_empty());
+        assert_eq!(ahu.cost_usd, 5000.0);
+        let by_elements: f64 = r.elements.iter().map(|e| e.cost_usd).sum();
+        assert!((by_elements - r.total_cost_usd).abs() < 1e-6);
     }
     #[test]
     fn unpriced_cost_code_is_flagged() {
