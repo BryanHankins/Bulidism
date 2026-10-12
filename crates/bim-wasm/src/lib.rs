@@ -42,6 +42,14 @@ pub fn new_project(name: &str, rule_set: &str) -> Result<String, String> {
     p.to_json().map_err(|e| e.to_string())
 }
 
+/// IFC (STEP text, IFC2x3/IFC4) -> `{"project": {...}, "notes": ["..."]}`. `file_name` names the
+/// project when the file has no IfcProject name.
+#[wasm_bindgen]
+pub fn import_ifc(ifc_text: &str, file_name: &str) -> Result<String, String> {
+    let r = bim_ifc::import(ifc_text, file_name).map_err(|e| e.to_string())?;
+    serde_json::to_string(&r).map_err(|e| e.to_string())
+}
+
 #[wasm_bindgen]
 pub fn schema_version() -> u32 {
     bim_core::SCHEMA_VERSION
@@ -65,6 +73,15 @@ mod tests {
     #[test]
     fn bad_json_is_err() {
         assert!(run("{", None).is_err());
+    }
+    #[test]
+    fn imports_ifc_to_a_runnable_project() {
+        let j = import_ifc(include_str!("../../bim-ifc/tests/data/fixture.ifc"), "f").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert!(v["notes"][0].as_str().unwrap().starts_with("Imported"));
+        let p = serde_json::to_string(&v["project"]).unwrap();
+        assert!(run(&p, Some(RS.to_string())).is_ok());
+        assert!(import_ifc("not ifc", "f").is_err());
     }
     #[test]
     fn new_project_is_valid() {

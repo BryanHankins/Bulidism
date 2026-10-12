@@ -59,6 +59,26 @@ fn invalid_project_exits_nonzero() {
 }
 
 #[test]
+fn imports_ifc_and_runs_the_pipeline() {
+    let dir = std::env::temp_dir().join("bim-cli-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let json = dir.join("from-ifc.json");
+    let (ok, out, err) = run(&[
+        "crates/bim-ifc/tests/data/fixture.ifc",
+        "--sample-out",
+        json.to_str().unwrap(),
+    ]);
+    assert!(ok, "{err}");
+    assert!(
+        out.contains("ifc: Imported") && out.contains("== Fixture Clinic"),
+        "{out}"
+    );
+    // the converted project round-trips as JSON
+    let (ok, _, err) = run(&[json.to_str().unwrap()]);
+    assert!(ok, "{err}");
+}
+
+#[test]
 fn explicit_missing_rules_fails() {
     let (ok, _, err) = run(&["--rules", "rules/NOPE.json"]);
     assert!(!ok && err.contains("cannot load rules"), "{err}");

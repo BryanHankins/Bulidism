@@ -9,7 +9,8 @@ Prototype v0.7 (Phase 1 in progress). See COMPLETION_STATUS.docx for done vs ope
 - crates/bim-rules     data-driven advisory rules (rules/IN-2026.json: 10 draft rules, citations only)
 - crates/bim-takeoff   quantities, cents-based costing, phase roll-up, CSV
 - crates/bim-report    ONE pipeline entry point (validate → schedule → rules → clashes → takeoff → meshes) → Report JSON; shared by CLI and wasm
-- crates/bim-wasm      wasm-bindgen exports: run(project_json, rules_json), validate, sample_project, new_project, schema_version
+- crates/bim-ifc       IFC import (IFC2x3/IFC4 STEP): own STEP reader; walls, slabs (sloped/roof slabs at measured thickness), columns, beams, doors (on their host wall), stairs, ramps, spaces (occupancy from OccupancyType, measured floor area); geometry from extrusions, B-reps, triangulated/polygonal face sets, mapped items; everything else counted in import notes. Tested against buildingSMART sample files (walls match the exporter's own quantities)
+- crates/bim-wasm      wasm-bindgen exports: run(project_json, rules_json), validate, import_ifc, sample_project, new_project, schema_version
 - crates/bim-cli       headless pipeline: validate -> schedule -> advisories -> clashes -> takeoff; --html writes a self-contained three.js 4D report
 - assets/sample_office.json  exported sample project
 - assets/sample_report.html  generated 4D report (open in any browser; verified in headless Chromium)
@@ -19,6 +20,7 @@ Prototype v0.7 (Phase 1 in progress). See COMPLETION_STATUS.docx for done vs ope
     cargo test --workspace            # all tests pass (bim-wasm exports are exercised natively)
     cargo clippy --workspace --all-targets -- -D warnings   # clean
     cargo run -p bim-cli -- assets/sample_office.json --csv takeoff.csv --html report.html
+    cargo run -p bim-cli -- model.ifc --sample-out model.json   # import IFC, print notes, run the pipeline
 
 ## Web build
     wasm-pack build crates/bim-wasm --target web --out-dir ../../web/pkg --release   # then serve web/ (web/README.md)

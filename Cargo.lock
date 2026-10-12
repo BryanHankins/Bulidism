@@ -7,6 +7,7 @@ name = "bim-cli"
 version = "0.1.0"
 dependencies = [
  "bim-core",
+ "bim-ifc",
  "bim-report",
  "bim-rules",
  "bim-takeoff",
@@ -31,6 +32,19 @@ dependencies = [
  "bim-core",
  "glam",
  "thiserror",
+]
+
+[[package]]
+name = "bim-ifc"
+version = "0.1.0"
+dependencies = [
+ "bim-core",
+ "bim-report",
+ "bim-rules",
+ "glam",
+ "serde",
+ "thiserror",
+ "uuid",
 ]
 
 [[package]]
@@ -79,6 +93,7 @@ name = "bim-wasm"
 version = "0.1.0"
 dependencies = [
  "bim-core",
+ "bim-ifc",
  "bim-report",
  "serde_json",
  "wasm-bindgen",
