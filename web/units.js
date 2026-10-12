@@ -46,6 +46,7 @@ export function parseLen(s, sys) {
 }
 
 export const fmtArea = (m2, sys) => sys === 'imperial' ? `${Math.round(m2 / M2_PER_SF).toLocaleString()} sf` : `${(+m2).toFixed(1)} m²`;
+export const fmtVol = (m3, sys) => sys === 'imperial' ? `${(m3 / (M_PER_FT ** 3)).toFixed(1)} cf` : `${(+m3).toFixed(3)} m³`;
 export const areaToInput = (m2, sys) => sys === 'imperial' ? String(Math.round(m2 / M2_PER_SF)) : String(+(+m2).toFixed(2));
 export const parseArea = (s, sys) => { const v = /^\s*(\d+\.?\d*|\.\d+)\s*$/.test(s) ? +s : NaN; return sys === 'imperial' ? v * M2_PER_SF : v; };
 

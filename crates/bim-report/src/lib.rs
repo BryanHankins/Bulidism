@@ -61,7 +61,20 @@ pub struct SpaceOut {
     pub occupancy: String,
     pub area_m2: f32,
     pub exits: usize,
+    /// Occupants per the rule set's area-per-occupant factor for this occupancy, if it has one.
+    pub occupant_load: Option<u32>,
     pub bounds: Option<[f32; 4]>,
+}
+
+/// Every rule evaluated, including those with no findings, so a report shows
+/// what was checked and how far each rule's parameters are verified.
+#[derive(Debug, Clone, Serialize)]
+pub struct RuleOut {
+    pub id: String,
+    pub cite: String,
+    pub severity: bim_rules::Severity,
+    pub verified: Option<String>,
+    pub findings: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -77,6 +90,9 @@ pub struct Report {
     pub elements: Vec<ElementOut>,
     pub clashes: Vec<ClashOut>,
     pub advisories: Vec<bim_rules::Advisory>,
+    pub rules_checked: Vec<RuleOut>,
+    /// Licensed reviewer of the rule set, if any (None = not yet reviewed).
+    pub rules_reviewer: Option<String>,
     pub spaces: Vec<SpaceOut>,
 }
 
@@ -182,6 +198,20 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
             });
         }
     }
+    let rules_checked = rules
+        .map(|rs| {
+            rs.rules
+                .iter()
+                .map(|r| RuleOut {
+                    id: r.id.clone(),
+                    cite: r.cite.clone(),
+                    severity: r.severity,
+                    verified: r.verified.clone(),
+                    findings: advisories.iter().filter(|a| a.rule_id == r.id).count(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let spaces = project
         .spaces
         .iter()
@@ -190,11 +220,25 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
             occupancy: format!("{:?}", s.occupancy),
             area_m2: s.area_m2(),
             exits: bim_rules::egress_exits(project, s),
+            occupant_load: rules.and_then(|rs| {
+                rs.rules.iter().find_map(|r| match r.check {
+                    bim_rules::Check::OccupantLoadExits {
+                        occupancy,
+                        area_per_occupant_m2,
+                        ..
+                    } if occupancy == s.occupancy && area_per_occupant_m2 > 0.0 => {
+                        Some((s.area_m2() / area_per_occupant_m2).ceil() as u32)
+                    }
+                    _ => None,
+                })
+            }),
             bounds: s.bounds,
         })
         .collect();
     Ok(Report {
         spaces,
+        rules_checked,
+        rules_reviewer: rules.and_then(|rs| rs.reviewer.clone()),
         project: project.name.clone(),
         rule_set,
         code_edition,
@@ -288,6 +332,22 @@ mod tests {
         let r = build(&p, None).unwrap();
         assert_eq!(r.advisories.len(), 1);
         assert_eq!(r.advisories[0].rule_id, "cost.missing_rate");
+    }
+    #[test]
+    fn report_lists_every_rule_and_occupant_load() {
+        let rs = bim_rules::RuleSet::from_json(RS).unwrap();
+        let r = build(&Project::sample(), Some(&rs)).unwrap();
+        assert_eq!(r.rules_checked.len(), rs.rules.len());
+        let hits: usize = r.rules_checked.iter().map(|c| c.findings).sum();
+        assert_eq!(hits, r.advisories.len());
+        assert!(r.rules_checked.iter().any(|c| c.findings == 0));
+        // 96 m2 Business at 13.9 m2/occupant
+        assert_eq!(r.spaces[0].occupant_load, Some(7));
+        assert_eq!(r.rules_reviewer, None);
+        assert_eq!(
+            build(&Project::sample(), None).unwrap().spaces[0].occupant_load,
+            None
+        );
     }
     #[test]
     fn invalid_project_is_error() {

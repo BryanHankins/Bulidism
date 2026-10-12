@@ -1,5 +1,6 @@
 // Live editor: JS owns the project JSON; every edit re-runs the Rust pipeline in wasm.
 import init, * as bim from './pkg/bim_wasm.js';
+import { printHtml } from './print.js';
 import { snapStep, lenToInput, parseLen, fmtArea, areaToInput, parseArea, qtyOut, convertMessage } from './units.js';
 
 const $ = id => document.getElementById(id);
@@ -205,6 +206,12 @@ $('exportCsv').onclick = () => {
   const rows = [['element','cost_code','phase','start_day','qty','unit','cost_usd'].join(',')]
     .concat(lastReport.elements.map(e => { const [q, u] = qtyOut(e.qty, e.unit, units); return [csvField(e.name), csvField(e.cost_code), e.phase, e.start_day, q.toFixed(3), u, e.cost_usd.toFixed(2)].join(','); }));
   download(`${project.name.replace(/\W+/g,'_')}_takeoff.csv`, rows.join('\n'), 'text/csv');
+};
+$('printReport').onclick = () => {
+  if (!lastReport) return;
+  const w = window.open('', '_blank');
+  if (!w) { $('runErr').textContent = 'Allow pop-ups for this site to open the printable report.'; return; }
+  w.document.write(printHtml(lastReport, units)); w.document.close();
 };
 $('exportHtml').onclick = async () => {
   if (!lastReport) return;
