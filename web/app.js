@@ -36,8 +36,8 @@ const lenInput = (attrs, m) => units === 'imperial'
 const badLen = v => { $('runErr').textContent = `Could not read length "${v}"` + (units === 'imperial' ? ` — try 3'-6", 42" or 3.5'` : ''); };
 function snapshot() { if (project) { undoStack.push(JSON.stringify(project)); if (undoStack.length > 50) undoStack.shift(); redoStack.length = 0; updateUndo(); } }
 function updateUndo() { $('undo').disabled = !undoStack.length; $('redo').disabled = !redoStack.length; }
-function undo() { if (!undoStack.length) return; redoStack.push(JSON.stringify(project)); project = JSON.parse(undoStack.pop()); if (!project.elements.some(e => e.id === selectedId)) selectedId = null; updateUndo(); rerun(); }
-function redo() { if (!redoStack.length) return; undoStack.push(JSON.stringify(project)); project = JSON.parse(redoStack.pop()); updateUndo(); rerun(); }
+function undo() { if (!undoStack.length) return; showImportNotes(); redoStack.push(JSON.stringify(project)); project = JSON.parse(undoStack.pop()); if (!project.elements.some(e => e.id === selectedId)) selectedId = null; updateUndo(); rerun(); }
+function redo() { if (!redoStack.length) return; showImportNotes(); undoStack.push(JSON.stringify(project)); project = JSON.parse(redoStack.pop()); updateUndo(); rerun(); }
 const step = () => snapStep(units);
 const snap = v => Math.round(v / step()) * step();
 
@@ -337,8 +337,32 @@ $('apply').onclick = () => { try { const p = JSON.parse($('jsonBox').value); con
 $('jsonBox').oninput = () => { try { $('jsonMsg').textContent = JSON.parse(bim.validate($('jsonBox').value)).join('\n'); } catch (e) { $('jsonMsg').textContent = String(e); } };
 $('save').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' })); a.download = `${project.name.replace(/\W+/g,'_')}.json`; a.click(); };
 $('open').onclick = () => $('file').click();
-$('file').onchange = async ev => { const f = ev.target.files[0]; if (!f) return; try { const p = JSON.parse(await f.text()); const v = JSON.parse(bim.validate(JSON.stringify(p))); if (v.length) throw new Error(v.join('\n')); snapshot(); project = p; selectedId = null; rerun(false); } catch (e) { $('runErr').textContent = String(e); } ev.target.value = ''; };
-$('new').onclick = () => { const name = prompt('Project name', 'New project'); if (!name) return; snapshot(); project = JSON.parse(bim.new_project(name, 'IN-2026')); rerun(false); };
+// Open a project (.json) or import a model (.ifc: IFC2x3/IFC4, converted by the Rust importer)
+$('file').onchange = async ev => {
+  const f = ev.target.files[0]; ev.target.value = ''; if (!f) return;
+  try {
+    const text = await f.text();
+    if (/\.ifc$/i.test(f.name) || text.trimStart().startsWith('ISO-10303-21')) {
+      status(`importing ${f.name}…`);
+      const r = JSON.parse(bim.import_ifc(text, f.name.replace(/\.[^.]+$/, '')));
+      snapshot(); project = r.project; selectedId = null;
+      showImportNotes(f.name, r.notes);
+      rerun(false);
+      return;
+    }
+    const p = JSON.parse(text); const v = JSON.parse(bim.validate(JSON.stringify(p)));
+    if (v.length) throw new Error(v.join('\n'));
+    snapshot(); project = p; selectedId = null; showImportNotes(); rerun(false);
+  } catch (e) { $('runErr').textContent = String(e); }
+};
+function showImportNotes(name, notes) {
+  const box = $('importNotes');
+  box.hidden = !notes;
+  if (!notes) return;
+  box.innerHTML = `<div style="display:flex;justify-content:space-between;gap:8px"><b>Imported ${esc(name)}</b><button class="btn" id="closeNotes" title="Dismiss">✕</button></div><ul style="margin:4px 0 0;padding-left:18px">${notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`;
+  $('closeNotes').onclick = () => { box.hidden = true; };
+}
+$('new').onclick = () => { const name = prompt('Project name', 'New project'); if (!name) return; snapshot(); project = JSON.parse(bim.new_project(name, 'IN-2026')); showImportNotes(); rerun(false); };
 document.querySelectorAll('.tabs .btn').forEach(b => b.onclick = () => selectTab(b.dataset.tab));
 
 

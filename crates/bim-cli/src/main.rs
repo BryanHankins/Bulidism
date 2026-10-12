@@ -1,5 +1,5 @@
 //! Headless pipeline: runs bim_report::build (validate -> schedule -> advisories -> clashes -> takeoff).
-//! Usage: bim-cli [project.json] [--rules rules/<project rule_set>.json] [--csv out.csv] [--html report.html] [--sample-out sample.json]
+//! Usage: bim-cli [project.json | model.ifc] [--rules rules/<project rule_set>.json] [--csv out.csv] [--html report.html] [--sample-out sample.json]
 //! --html writes a self-contained 4D viewer (three.js inlined) with all geometry, schedule,
 //! cost, clash and advisory data computed here in Rust — the hybrid render path from the plan.
 use std::{env, fs, process::ExitCode};
@@ -27,8 +27,21 @@ fn main() -> ExitCode {
     let project = match project_path.as_deref() {
         Some(p) => match fs::read_to_string(p)
             .map_err(|e| e.to_string())
-            .and_then(|s| bim_core::Project::from_json(&s).map_err(|e| e.to_string()))
-        {
+            .and_then(|s| {
+                if p.to_ascii_lowercase().ends_with(".ifc") {
+                    let stem = std::path::Path::new(p)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("IFC import");
+                    let r = bim_ifc::import(&s, stem).map_err(|e| e.to_string())?;
+                    for n in &r.notes {
+                        println!("ifc: {n}");
+                    }
+                    Ok(r.project)
+                } else {
+                    bim_core::Project::from_json(&s).map_err(|e| e.to_string())
+                }
+            }) {
             Ok(pr) => pr,
             Err(e) => {
                 eprintln!("error: cannot load {p}: {e}");

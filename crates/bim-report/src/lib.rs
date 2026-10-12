@@ -186,17 +186,26 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
         None => ("none".into(), "no rule file".into(), "n/a".into(), vec![]),
     };
     let mut advisories = advisories;
-    // an unpriced cost code silently totals $0; surface it
+    // an unpriced cost code silently totals $0; surface it, once per code (an
+    // imported model has no rates yet, so per-element advisories would flood)
+    let mut unpriced: std::collections::BTreeMap<&str, usize> = Default::default();
     for e in &project.elements {
         if !project.unit_costs.contains_key(&e.cost_code) {
-            advisories.push(bim_rules::Advisory {
-                rule_id: "cost.missing_rate".into(),
-                cite: String::new(),
-                severity: bim_rules::Severity::Info,
-                subject: e.name.clone(),
-                message: format!("no unit cost for cost code '{}'; priced at $0", e.cost_code),
-            });
+            *unpriced.entry(e.cost_code.as_str()).or_default() += 1;
         }
+    }
+    for (code, n) in unpriced {
+        advisories.push(bim_rules::Advisory {
+            rule_id: "cost.missing_rate".into(),
+            cite: String::new(),
+            severity: bim_rules::Severity::Info,
+            subject: if code.is_empty() {
+                "(no cost code)".into()
+            } else {
+                code.to_string()
+            },
+            message: format!("{n} element(s) have no unit cost for this code; priced at $0"),
+        });
     }
     let rules_checked = rules
         .map(|rs| {
@@ -329,9 +338,16 @@ mod tests {
     fn unpriced_cost_code_is_flagged() {
         let mut p = Project::sample();
         p.elements[0].cost_code = "Z9999".into();
+        p.elements[1].cost_code = "Z9999".into();
         let r = build(&p, None).unwrap();
-        assert_eq!(r.advisories.len(), 1);
+        assert_eq!(
+            r.advisories.len(),
+            1,
+            "one advisory per code, not per element"
+        );
         assert_eq!(r.advisories[0].rule_id, "cost.missing_rate");
+        assert_eq!(r.advisories[0].subject, "Z9999");
+        assert!(r.advisories[0].message.starts_with("2 element(s)"));
     }
     #[test]
     fn report_lists_every_rule_and_occupant_load() {
