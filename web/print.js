@@ -9,6 +9,13 @@ const cssStr = v => String(v).replace(/[\\"]/g, c => '\\' + c).replace(/[\r\n<]/
 const RANK = { error: 0, warning: 1, info: 2 };
 const LABEL = { error: 'Error', warning: 'Warning', info: 'Info' };
 
+/** Data gaps that weaken the results; listed before the analysis so readers weigh it. */
+function readinessBlock(items) {
+  if (!items || !items.length) return '';
+  return `<h2>Model readiness</h2><ul style="margin:4px 0 0;padding-left:18px">${items.map(i =>
+    `<li${i.severity === 'warning' ? ' class="sev warning" style="font-weight:400"' : ''}>${i.count ? i.count + ' ' : ''}${esc(i.message)}${i.examples.length ? ` (${i.examples.map(esc).join(', ')}${i.count > i.examples.length ? ', …' : ''})` : ''}</li>`).join('')}</ul>`;
+}
+
 /** The code analysis sheet ("code data block"); empty when the rule set has no parameters. */
 function codeSheet(c, units, table) {
   if (!c) return '';
@@ -94,6 +101,7 @@ tr { break-inside: avoid; } td.num, th.num { text-align: right; white-space: now
  <div><b>${(r.rules_checked || []).length}</b>Rules checked</div><div><b>${r.clashes.length}</b>Clashes</div>
 </div>
 
+${readinessBlock(r.readiness)}
 ${codeSheet(r.code_summary, units, table)}
 <h2>Findings</h2>
 ${table(['##', 'Severity', 'Element / space', 'Finding', 'Measured#', 'Required#', 'Citation'],

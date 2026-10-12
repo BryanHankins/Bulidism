@@ -5,6 +5,7 @@ use bim_core::*;
 use serde::Serialize;
 
 pub mod code;
+pub mod readiness;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReportError {
@@ -107,6 +108,8 @@ pub struct Report {
     pub rules_checked: Vec<RuleOut>,
     /// Code analysis sheet, when the rule set has `code_summary` parameters.
     pub code_summary: Option<code::CodeSummary>,
+    /// Data the checks depend on but the model lacks.
+    pub readiness: Vec<readiness::ReadinessItem>,
     /// Licensed reviewer of the rule set, if any (None = not yet reviewed).
     pub rules_reviewer: Option<String>,
     pub spaces: Vec<SpaceOut>,
@@ -293,6 +296,7 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
         levels,
         rules_checked,
         code_summary,
+        readiness: readiness::check(project, rules),
         rules_reviewer: rules.and_then(|rs| rs.reviewer.clone()),
         project: project.name.clone(),
         rule_set,

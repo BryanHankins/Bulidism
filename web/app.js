@@ -87,6 +87,7 @@ function rerun(keepDay = true) {
       ? report.spaces.map(s => `<div class="row"><span>${esc(s.name)} <small style="color:var(--muted)">${s.occupancy}</small></span><span>${fmtArea(s.area_m2, units)} · ${s.exits} exit${s.exits===1?'':'s'}</span></div>`).join('')
       : '<div class="row"><span>No spaces defined</span></div>';
     renderCodeSummary(report.code_summary);
+    renderReadiness(report.readiness || []);
     renderReport(report, { day: keepDay ? Math.min(lastDay, report.total_days) : 0, selected: selectedId, onClick: onViewClick, onMove: onViewMove, onHandle: onViewHandle, handlesFor, onDay: d => lastDay = d, level: lastLevel, onLevel: l => lastLevel = l, groundY: lvlY() });
     status(`ran in ${(performance.now()-t0).toFixed(1)} ms · schema v${bim.schema_version()}${rules ? '' : ` · no rule file for '${project.rule_set}', advisories skipped`}${notice}`);
     notice = '';
@@ -320,6 +321,13 @@ function onViewClick({ id, point, ground }) {
   selectedId = id; window.__viewer.highlight(id); renderProps(); if (id) selectTab('edit');
 }
 
+
+// ---- model readiness: what the checks need but the model lacks ----
+function renderReadiness(items) {
+  const warn = items.filter(i => i.severity === 'warning').length;
+  $('readiness').innerHTML = items.length ? `<details class="disclaimer" ${warn ? 'open' : ''} style="margin-bottom:10px"><summary><b>Model readiness:</b> ${warn} warning${warn === 1 ? '' : 's'}, ${items.length - warn} note${items.length - warn === 1 ? '' : 's'}</summary>` +
+    `<ul style="margin:6px 0 0;padding-left:18px">${items.map(i => `<li${i.severity === 'warning' ? ' style="color:var(--err)"' : ''}>${i.count ? i.count + ' ' : ''}${esc(i.message)}${i.examples.length ? ` <small style="color:var(--muted)">(${i.examples.map(esc).join(', ')}${i.count > i.examples.length ? ', …' : ''})</small>` : ''}</li>`).join('')}</ul></details>` : '';
+}
 
 // ---- code analysis (report pane) and building facts (editor) ----
 function renderCodeSummary(c) {

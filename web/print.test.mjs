@@ -66,6 +66,13 @@ test('code analysis sheet', () => {
   assert.ok(!printHtml(report(), 'metric').includes('Code analysis'), 'no sheet without parameters');
 });
 
+test('readiness items print before the analysis', () => {
+  const h = printHtml(report({ readiness: [{ id: 'space.no_exits', severity: 'warning', message: 'spaces with <no> exits', count: 7, examples: ['A', 'B'] }] }), 'metric');
+  assert.ok(h.includes('<h2>Model readiness</h2>') && h.includes('7 spaces with &#60;no&#62; exits (A, B, …)'));
+  assert.ok(h.indexOf('Model readiness') < h.indexOf('<h2>Findings</h2>'));
+  assert.ok(!printHtml(report({ readiness: [] }), 'metric').includes('Model readiness'));
+});
+
 test('page footer is a safe CSS string', () => {
   const h = printHtml(report({ project: 'A "quoted" \\ name</style><script>' }), 'metric');
   const css = h.slice(h.indexOf('<style>'), h.indexOf('</style>'));
