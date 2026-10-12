@@ -14,8 +14,12 @@ pub enum Severity {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "check", rename_all = "snake_case")]
 pub enum Check {
+    /// Doors are modelled by leaf width; clear width = leaf - `leaf_to_clear_deduction_m`
+    /// (stop + leaf thickness when open 90 degrees).
     EgressDoorMinWidth {
         min_clear_width_m: f32,
+        #[serde(default)]
+        leaf_to_clear_deduction_m: f32,
     },
     DoorMinHeight {
         min_height_m: f32,
@@ -98,7 +102,10 @@ impl RuleSet {
         for r in &self.rules {
             let mut hits: Vec<(String, String)> = Vec::new();
             match &r.check {
-                Check::EgressDoorMinWidth { min_clear_width_m } => {
+                Check::EgressDoorMinWidth {
+                    min_clear_width_m,
+                    leaf_to_clear_deduction_m: ded,
+                } => {
                     for e in &p.elements {
                         if let ElementKind::Door {
                             width,
@@ -106,8 +113,9 @@ impl RuleSet {
                             ..
                         } = e.kind
                         {
-                            if width < *min_clear_width_m {
-                                hits.push((e.name.clone(), format!("egress door clear width {width:.3} m < {min_clear_width_m:.3} m")));
+                            let clear = width - ded;
+                            if clear < *min_clear_width_m {
+                                hits.push((e.name.clone(), format!("egress door clear width {clear:.3} m (leaf {width:.3} m - {ded:.3} m) < {min_clear_width_m:.3} m")));
                             }
                         }
                     }
@@ -264,6 +272,30 @@ mod tests {
                 .any(|a| a.rule_id == "egress.door.min_clear_width"),
             "{adv:?}"
         );
+    }
+    #[test]
+    fn clear_width_deducts_from_leaf() {
+        let rs = RuleSet::from_json(RS).unwrap();
+        let mut p = Project::sample();
+        let set_rear = |p: &mut Project, w: f32| {
+            for e in &mut p.elements {
+                if let ElementKind::Door { width, .. } = &mut e.kind {
+                    if e.name == "Rear exit" {
+                        *width = w;
+                    }
+                }
+            }
+        };
+        let flagged = |p: &Project| {
+            rs.evaluate(p)
+                .iter()
+                .any(|a| a.subject == "Rear exit" && a.rule_id == "egress.door.min_clear_width")
+        };
+        // a 0.84 m leaf passes on nominal width but not after the stop/leaf deduction
+        set_rear(&mut p, 0.84);
+        assert!(flagged(&p));
+        set_rear(&mut p, 0.9);
+        assert!(!flagged(&p));
     }
     #[test]
     fn unknown_field_rejected() {

@@ -1,8 +1,9 @@
-//! Parametric element -> triangle mesh, plus AABB clash detection.
+//! Parametric element -> triangle mesh, plus clash detection (AABB broadphase,
+//! exact plan-polygon x height narrowphase).
 //! Walls are oriented boxes split around door openings (no CSG needed);
 //! stairs are stepped; ramps are wedges. Units: metres, Y up.
 use bim_core::*;
-use glam::{vec3, Mat3, Vec3};
+use glam::{vec3, Mat3, Vec2, Vec3};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Mesh {
@@ -356,11 +357,14 @@ pub fn mesh_for(project: &Project, e: &Element) -> Result<Mesh, GeomError> {
             width,
             riser_count,
         } => {
+            // n risers climb n-1 treads; the top riser lands on the floor above
+            // (same convention as the stair geometry rule)
             let n = (*riser_count).max(1);
             let riser = total_rise / n as f32;
-            let tread = run_length / n as f32;
+            let treads = (n - 1).max(1);
+            let tread = run_length / treads as f32;
             let mut m = Mesh::default();
-            for i in 0..n {
+            for i in 0..treads {
                 let x0 = base.x + tread * i as f32;
                 m.append(box_mesh(&Aabb {
                     min: vec3(x0, base.y, base.z),
@@ -412,9 +416,112 @@ pub struct Clash {
     pub a: ElementId,
     pub b: ElementId,
     pub overlap_m3: f32,
+    /// Bounds of the actual overlap region (not of the two elements' AABBs).
+    pub region: Aabb,
 }
 
-/// Cross-discipline AABB clashes. Sort-and-sweep on X; doors excluded (they live inside their host).
+/// Element as a vertical prism: convex plan footprint (XZ) plus [y0, y1].
+/// Walls and beams are rotated rectangles, so diagonal members are not
+/// inflated to their AABB. Ramps/stairs use their bounding box (conservative).
+fn prism(project: &Project, e: &Element) -> Option<(Vec<Vec2>, f32, f32)> {
+    let rotated = |start: &Vec3, end: &Vec3, w: f32| {
+        let (s, t) = (Vec2::new(start.x, start.z), Vec2::new(end.x, end.z));
+        let n = (t - s).normalize_or_zero().perp() * (w / 2.0);
+        vec![s + n, t + n, t - n, s - n]
+    };
+    Some(match &e.kind {
+        ElementKind::Wall {
+            start,
+            end,
+            height,
+            thickness,
+        } => (rotated(start, end, *thickness), start.y, start.y + height),
+        ElementKind::Beam {
+            start,
+            end,
+            width,
+            depth,
+        } => (rotated(start, end, *width), start.y, start.y + depth),
+        ElementKind::Door { .. } | ElementKind::Mesh { .. } => return None,
+        _ => {
+            let b = aabb(project, e).ok()?;
+            (
+                vec![
+                    Vec2::new(b.min.x, b.min.z),
+                    Vec2::new(b.max.x, b.min.z),
+                    Vec2::new(b.max.x, b.max.z),
+                    Vec2::new(b.min.x, b.max.z),
+                ],
+                b.min.y,
+                b.max.y,
+            )
+        }
+    })
+}
+
+fn signed_area(poly: &[Vec2]) -> f32 {
+    (0..poly.len())
+        .map(|i| poly[i].perp_dot(poly[(i + 1) % poly.len()]))
+        .sum::<f32>()
+        / 2.0
+}
+
+/// Sutherland-Hodgman: `subject` clipped to convex `clip` (either winding).
+fn clip_convex(subject: &[Vec2], clip: &[Vec2]) -> Vec<Vec2> {
+    let orient = signed_area(clip).signum();
+    if orient == 0.0 {
+        return vec![];
+    }
+    let mut out = subject.to_vec();
+    for i in 0..clip.len() {
+        if out.is_empty() {
+            break;
+        }
+        let (a, b) = (clip[i], clip[(i + 1) % clip.len()]);
+        let side = |p: Vec2| orient * (b - a).perp_dot(p - a);
+        let input = std::mem::take(&mut out);
+        for j in 0..input.len() {
+            let (p, q) = (input[j], input[(j + 1) % input.len()]);
+            let (dp, dq) = (side(p), side(q));
+            if dp >= 0.0 {
+                out.push(p);
+            }
+            if (dp >= 0.0) != (dq >= 0.0) {
+                out.push(p + (q - p) * (dp / (dp - dq)));
+            }
+        }
+    }
+    out
+}
+
+/// Exact overlap of two element prisms, or None if they do not overlap.
+fn overlap(project: &Project, a: &Element, b: &Element) -> Option<(f32, Aabb)> {
+    let (pa, a0, a1) = prism(project, a)?;
+    let (pb, b0, b1) = prism(project, b)?;
+    let (y0, y1) = (a0.max(b0), a1.min(b1));
+    if y1 <= y0 {
+        return None;
+    }
+    let poly = clip_convex(&pa, &pb);
+    let area = signed_area(&poly).abs();
+    if area <= 0.0 {
+        return None;
+    }
+    let (lo, hi) = poly
+        .iter()
+        .fold((poly[0], poly[0]), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+    Some((
+        area * (y1 - y0),
+        Aabb {
+            min: vec3(lo.x, y0, lo.y),
+            max: vec3(hi.x, y1, hi.y),
+        },
+    ))
+}
+
+/// Cross-discipline clashes: sort-and-sweep on AABB X, then exact prism overlap.
+/// Doors excluded (they live inside their host). Same-discipline contact (beam
+/// on column, wall on slab) is intentional framing, so it is not reported.
 /// `tolerance_m3`: ignore overlaps smaller than this (touching faces, minor penetration).
 pub fn clashes(project: &Project, tolerance_m3: f32) -> Vec<Clash> {
     let mut boxes: Vec<(&Element, Aabb)> = project
@@ -434,12 +541,15 @@ pub fn clashes(project: &Project, tolerance_m3: f32) -> Vec<Clash> {
             if ea.discipline == eb.discipline || !ba.intersects(&bb) {
                 continue;
             }
-            let v = ba.intersection(&bb).volume();
+            let Some((v, region)) = overlap(project, ea, eb) else {
+                continue;
+            };
             if v > tolerance_m3 {
                 out.push(Clash {
                     a: ea.id,
                     b: eb.id,
                     overlap_m3: v,
+                    region,
                 });
             }
         }
@@ -538,7 +648,7 @@ mod tests {
             mesh_for(&p, by_name(&p, "Stair to mezzanine"))
                 .unwrap()
                 .triangle_count(),
-            17 * 12
+            16 * 12
         );
     }
     #[test]
@@ -554,6 +664,63 @@ mod tests {
         // wall vs corner columns (4) + beam vs walls (2) — structural/architectural overlaps by design
         assert!(c.len() >= 4 && c.len() <= 6, "{c:?}");
         assert!(clashes(&p, 1.0).len() < c.len());
+    }
+    #[test]
+    fn sample_clash_volume_is_exact() {
+        // 0.4x0.4 column centred on the wall end overlaps 0.2 (x) * 0.25 (z) * 3.0 (y);
+        // the old AABB test also counted the wall's phantom end-cap (0.244 m3)
+        let p = Project::sample();
+        for c in clashes(&p, 0.0) {
+            assert!((c.overlap_m3 - 0.15).abs() < 1e-4, "{c:?}");
+            assert!((c.region.volume() - 0.15).abs() < 1e-4, "{c:?}");
+        }
+    }
+    #[test]
+    fn diagonal_wall_no_false_clash() {
+        let mut p = Project::new("x", "IBC-2024");
+        p.add(Element::new(
+            "diag",
+            ElementKind::Wall {
+                start: Vec3::ZERO,
+                end: vec3(10.0, 0.0, 10.0),
+                height: 3.0,
+                thickness: 0.2,
+            },
+            Discipline::Architectural,
+            PhaseId(0),
+        ));
+        // inside the wall's AABB but 5.6 m from the wall line
+        p.add(Element::new(
+            "corner col",
+            ElementKind::Column {
+                base: vec3(9.0, 0.0, 1.0),
+                width: 0.4,
+                depth: 0.4,
+                height: 3.0,
+            },
+            Discipline::Structural,
+            PhaseId(0),
+        ));
+        assert!(clashes(&p, 0.0).is_empty());
+        // on the wall line it does clash
+        if let ElementKind::Column { base, .. } = &mut p.elements[1].kind {
+            *base = vec3(5.0, 0.0, 5.0);
+        }
+        let c = clashes(&p, 0.0);
+        assert_eq!(c.len(), 1, "{c:?}");
+    }
+    #[test]
+    fn clip_rotated_squares() {
+        let sq = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(2.0, 0.0),
+            Vec2::new(2.0, 2.0),
+            Vec2::new(0.0, 2.0),
+        ];
+        let shifted: Vec<Vec2> = sq.iter().rev().map(|p| *p + Vec2::ONE).collect();
+        assert!((signed_area(&clip_convex(&sq, &shifted)).abs() - 1.0).abs() < 1e-5);
+        let far: Vec<Vec2> = sq.iter().map(|p| *p + Vec2::splat(5.0)).collect();
+        assert!(clip_convex(&sq, &far).len() < 3);
     }
     #[test]
     fn mesh_element_has_no_geometry() {

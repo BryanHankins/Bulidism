@@ -129,17 +129,12 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
     }
     let clashes = bim_geom::clashes(project, CLASH_TOLERANCE_M3)
         .into_iter()
-        .filter_map(|c| {
-            let a = bim_geom::aabb(project, project.element(c.a).ok()?).ok()?;
-            let b = bim_geom::aabb(project, project.element(c.b).ok()?).ok()?;
-            let o = a.intersection(&b);
-            Some(ClashOut {
-                a: c.a,
-                b: c.b,
-                min: o.min.to_array(),
-                max: o.max.to_array(),
-                overlap_m3: c.overlap_m3,
-            })
+        .map(|c| ClashOut {
+            a: c.a,
+            b: c.b,
+            min: c.region.min.to_array(),
+            max: c.region.max.to_array(),
+            overlap_m3: c.overlap_m3,
         })
         .collect();
     let (rule_set, code_edition, rules_verified, advisories) = match rules {

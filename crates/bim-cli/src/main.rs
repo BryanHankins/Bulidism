@@ -113,7 +113,7 @@ fn main() -> ExitCode {
     }
 
     println!(
-        "\nClashes ({}) — cross-discipline AABB overlap > {} m3",
+        "\nClashes ({}) — cross-discipline overlap > {} m3",
         report.clashes.len(),
         bim_report::CLASH_TOLERANCE_M3
     );

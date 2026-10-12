@@ -4,7 +4,7 @@ Prototype v0.6 (Phase 1 in progress). See COMPLETION_STATUS.docx for done vs ope
 
 ## Layout
 - crates/bim-core      IFC-aligned model, JSON I/O, validate(), Project::sample()
-- crates/bim-geom      oriented wall/beam boxes with door cut-outs, stepped stairs, ramp wedges, sort-and-sweep clash detection
+- crates/bim-geom      oriented wall/beam boxes with door cut-outs, stepped stairs, ramp wedges, clash detection (AABB sweep + exact rotated-footprint overlap)
 - crates/bim-schedule  phase DAG (Kahn), CPM critical path, per-element 4D start days
 - crates/bim-rules     data-driven advisory rules (rules/IN-2026.json: 5 draft rules, citations only)
 - crates/bim-takeoff   quantities, cents-based costing, phase roll-up, CSV
