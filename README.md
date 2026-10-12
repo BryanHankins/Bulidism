@@ -13,7 +13,7 @@ Prototype v0.7 (Phase 1 in progress). See COMPLETION_STATUS.docx for done vs ope
 - crates/bim-cli       headless pipeline: validate -> schedule -> advisories -> clashes -> takeoff; --html writes a self-contained three.js 4D report
 - assets/sample_office.json  exported sample project
 - assets/sample_report.html  generated 4D report (open in any browser; verified in headless Chromium)
-- web/                 live editor app: select/property panel, click-to-place walls, columns and doors (doors snap onto the wall you click), drag-to-move, undo/redo (Ctrl+Z/Y), Delete key, phase Gantt, CSV + standalone-HTML report export, JSON tab — index.html + app.js + viewer.js/css (shared with the static report) + vendored three.js; needs web/pkg from wasm-pack (see web/README.md)
+- web/                 live editor app: select/property panel, click-to-place walls, columns and doors (doors snap onto the wall you click), drag-to-move, undo/redo (Ctrl+Z/Y), Delete key, phase Gantt, CSV + standalone-HTML report export, JSON tab, autosave to browser storage (restored on reload), ft-in or metric display (model stays metric; web/units.js, tested by `node --test web/units.test.mjs`) — index.html + app.js + viewer.js/css (shared with the static report) + vendored three.js; needs web/pkg from wasm-pack (see web/README.md)
 
 ## Verified (Rust 1.75, Ubuntu 24.04)
     cargo test --workspace            # all tests pass (bim-wasm exports are exercised natively)
