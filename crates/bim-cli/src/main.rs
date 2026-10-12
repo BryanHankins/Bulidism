@@ -102,7 +102,7 @@ fn main() -> ExitCode {
         );
     }
 
-    if rule_set.is_some() {
+    if rule_set.is_some() || !report.advisories.is_empty() {
         println!("\nAdvisories ({}) — {} [{}] verified: {} — ADVISORY ONLY, not a compliance determination", report.advisories.len(), report.rule_set, report.code_edition, report.rules_verified);
         for a in &report.advisories {
             println!(
@@ -153,7 +153,8 @@ fn main() -> ExitCode {
 fn render_html(report: &bim_report::Report) -> Result<String, String> {
     let json = serde_json::to_string(report)
         .map_err(|e| e.to_string())?
-        .replace("</", "<\\/");
+        // inside <script>, '<' must never appear raw (covers </script and <!--)
+        .replace('<', "\\u003c");
     Ok(VIEWER_HTML
         .replacen("/*__CSS__*/", VIEWER_CSS, 1)
         .replacen("/*__THREE__*/", THREE_JS, 1)

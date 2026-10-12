@@ -152,8 +152,10 @@ $('placeDoor').onclick = () => setPlacing(placing === 'door' ? null : 'door');
 function onViewMove(id, dx, dz) {
   const e = project.elements.find(x => x.id === id); if (!e) return;
   const kind = Object.keys(e.kind)[0], k = e.kind[kind];
+  const w = kind === 'Door' && project.elements.find(x => x.id === k.host);
+  if (kind === 'Door' && !w) return;
   snapshot();
-  if (kind === 'Door') { const w = project.elements.find(x => x.id === k.host); if (!w) return;
+  if (kind === 'Door') {
     const [sx,,sz] = w.kind.Wall.start, [ex,,ez] = w.kind.Wall.end, len = Math.hypot(ex-sx, ez-sz) || 1;
     const along = ((dx*(ex-sx)) + (dz*(ez-sz))) / len;
     k.offset = Math.max(0, Math.min(len - k.width, snap(k.offset + along)));
@@ -162,18 +164,20 @@ function onViewMove(id, dx, dz) {
 }
 
 // Exports built from the report the wasm just produced.
+// RFC 4180 quoting; leading =,+,-,@ prefixed with ' so spreadsheets don't evaluate it (matches bim_takeoff::csv_field)
+function csvField(v) { v = String(v); if (/^[=+\-@\t\r]/.test(v)) v = "'" + v; return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
 function download(name, text, type) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click(); }
 $('exportCsv').onclick = () => {
   if (!lastReport) return;
   const rows = [['element','cost_code','phase','start_day','qty','unit','cost_usd'].join(',')]
-    .concat(lastReport.elements.map(e => [e.name.replace(/,/g,' '), e.cost_code, e.phase, e.start_day, e.qty.toFixed(3), e.unit, e.cost_usd.toFixed(2)].join(',')));
+    .concat(lastReport.elements.map(e => [csvField(e.name), csvField(e.cost_code), e.phase, e.start_day, e.qty.toFixed(3), e.unit, e.cost_usd.toFixed(2)].join(',')));
   download(`${project.name.replace(/\W+/g,'_')}_takeoff.csv`, rows.join('\n'), 'text/csv');
 };
 $('exportHtml').onclick = async () => {
   if (!lastReport) return;
   const [shell, css, js, three] = await Promise.all(['report_shell.html','viewer.css','viewer.js','three.r128.min.js'].map(f => fetch(f).then(r => r.text())));
-  const page = shell.replace('/*__CSS__*/', css).replace('/*__THREE__*/', three).replace('/*__VIEWER__*/', js)
-    .replace('/*__DATA__*/', JSON.stringify(lastReport).replace(/<\//g, '<\\/'));
+  const page = shell.replace('/*__CSS__*/', () => css).replace('/*__THREE__*/', () => three).replace('/*__VIEWER__*/', () => js)
+    .replace('/*__DATA__*/', () => JSON.stringify(lastReport).replace(/</g, '\\u003c'));
   download(`${project.name.replace(/\W+/g,'_')}_report.html`, page, 'text/html');
 };
 $('undo').onclick = undo; $('redo').onclick = redo;
@@ -222,8 +226,8 @@ function renderEditor() {
   }).join('') + `<button class="btn" id="addPhase">+ phase (after last)</button>`;
   $('phaseEdit').querySelectorAll('input[data-f]').forEach(inp => inp.onchange = () => { snapshot(); const p = project.phases[+inp.dataset.ph]; p[inp.dataset.f] = inp.dataset.f === 'name' ? inp.value : +inp.value; rerun(); });
   $('phaseEdit').querySelectorAll('input[data-dep]').forEach(cb => cb.onchange = () => { snapshot(); const p = project.phases[+cb.dataset.ph], d = +cb.dataset.dep; p.depends_on = cb.checked ? [...new Set([...p.depends_on, d])] : p.depends_on.filter(x => x !== d); rerun(); });
-  $('phaseEdit').querySelectorAll('[data-delph]').forEach(b => b.onclick = () => { snapshot(); const id = project.phases[+b.dataset.delph].id; project.phases = project.phases.filter(p => p.id !== id); project.phases.forEach(p => p.depends_on = p.depends_on.filter(d => d !== id)); const first = project.phases[0]; project.elements.forEach(e => { if (e.phase === id && first) e.phase = first.id; }); rerun(); });
-  $('addPhase').onclick = () => { snapshot(); const last = project.phases[project.phases.length-1]; const id = (last ? last.id : -1) + 1; project.phases.push({ id, name: `Phase ${id+1}`, duration_days: 10, depends_on: last ? [last.id] : [] }); rerun(); };
+  $('phaseEdit').querySelectorAll('[data-delph]').forEach(b => b.onclick = () => { if (project.phases.length < 2) { $('runErr').textContent = 'A project needs at least one phase.'; return; } snapshot(); const id = project.phases[+b.dataset.delph].id; project.phases = project.phases.filter(p => p.id !== id); project.phases.forEach(p => p.depends_on = p.depends_on.filter(d => d !== id)); const first = project.phases[0]; project.elements.forEach(e => { if (e.phase === id && first) e.phase = first.id; }); rerun(); });
+  $('addPhase').onclick = () => { snapshot(); const last = project.phases[project.phases.length-1]; const id = project.phases.reduce((m, p) => Math.max(m, p.id), -1) + 1; project.phases.push({ id, name: `Phase ${id+1}`, duration_days: 10, depends_on: last ? [last.id] : [] }); rerun(); };
   $('elements').innerHTML = project.elements.map((e, i) => `<div class="el" data-id="${e.id}" style="cursor:pointer${e.id===selectedId?';color:var(--accent)':''}"><span>${esc(e.name)} <small style="color:var(--muted)">${Object.keys(e.kind)[0]} · ph${e.phase}</small></span><button data-i="${i}" title="delete">✕</button></div>`).join('');
   $('elements').querySelectorAll('.el').forEach(d => d.onclick = ev => { if (ev.target.tagName === 'BUTTON') return; selectedId = d.dataset.id; window.__viewer.highlight(selectedId); renderProps(); renderEditor(); });
   $('elements').querySelectorAll('button').forEach(b => b.onclick = () => { snapshot(); const id = project.elements[+b.dataset.i].id; project.elements = project.elements.filter(e => e.id !== id && !(e.kind.Door && e.kind.Door.host === id)); project.spaces.forEach(s => s.egress_doors = s.egress_doors.filter(d => project.elements.some(e => e.id === d))); rerun(); });
@@ -239,13 +243,13 @@ function renderEditor() {
 $('addForm').onsubmit = ev => {
   ev.preventDefault();
   const k = KINDS[$('kind').value], fd = new FormData(ev.target), f = {};
-  snapshot();
   for (const [n, v] of fd) f[n] = (n === 'host' || n === 'name') ? v : (n === 'is_egress' ? !!v : +v);
   if ($('kind').value === 'Door' && !f.host) { $('runErr').textContent = 'Add a wall first.'; return; }
+  snapshot();
   project.elements.push({ id: uuid(), name: f.name, kind: k.build(f), discipline: k.disc, phase: +fd.get('phase'), start_offset_days: 0, lod: 'Lod200', cost_code: k.code, material: '' });
   rerun();
 };
-$('apply').onclick = () => { try { const p = JSON.parse($('jsonBox').value); snapshot(); const v = JSON.parse(bim.validate(JSON.stringify(p))); $('jsonMsg').textContent = v.join('\n'); if (!v.length) { project = p; rerun(); } } catch (e) { $('jsonMsg').textContent = String(e); } };
+$('apply').onclick = () => { try { const p = JSON.parse($('jsonBox').value); const v = JSON.parse(bim.validate(JSON.stringify(p))); $('jsonMsg').textContent = v.join('\n'); if (!v.length) { snapshot(); project = p; rerun(); } } catch (e) { $('jsonMsg').textContent = String(e); } };
 $('jsonBox').oninput = () => { try { $('jsonMsg').textContent = JSON.parse(bim.validate($('jsonBox').value)).join('\n'); } catch (e) { $('jsonMsg').textContent = String(e); } };
 $('save').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' })); a.download = `${project.name.replace(/\W+/g,'_')}.json`; a.click(); };
 $('open').onclick = () => $('file').click();

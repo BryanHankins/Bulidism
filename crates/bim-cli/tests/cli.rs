@@ -21,7 +21,7 @@ fn sample_report_golden() {
         "57 days total",
         "Advisories (2)",
         "Clashes (4)",
-        "TOTAL          $    30204.76",
+        "TOTAL          $    29442.46",
         "egress door clear width",
     ] {
         assert!(out.contains(needle), "missing {needle:?} in:\n{out}");

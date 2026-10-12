@@ -163,6 +163,19 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
         ),
         None => ("none".into(), "no rule file".into(), "n/a".into(), vec![]),
     };
+    let mut advisories = advisories;
+    // an unpriced cost code silently totals $0; surface it
+    for e in &project.elements {
+        if !project.unit_costs.contains_key(&e.cost_code) {
+            advisories.push(bim_rules::Advisory {
+                rule_id: "cost.missing_rate".into(),
+                cite: String::new(),
+                severity: bim_rules::Severity::Info,
+                subject: e.name.clone(),
+                message: format!("no unit cost for cost code '{}'; priced at $0", e.cost_code),
+            });
+        }
+    }
     let spaces = project
         .spaces
         .iter()
@@ -170,7 +183,7 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
             name: s.name.clone(),
             occupancy: format!("{:?}", s.occupancy),
             area_m2: s.area_m2(),
-            exits: s.egress_doors.len(),
+            exits: bim_rules::egress_exits(project, s),
             bounds: s.bounds,
         })
         .collect();
@@ -214,7 +227,8 @@ mod tests {
         assert_eq!(r.spaces.len(), 1);
         assert_eq!(r.spaces[0].exits, 2);
         assert_eq!(r.spaces[0].area_m2, 96.0);
-        assert!((r.phases.iter().map(|p| p.cost_usd).sum::<f64>() - 30204.76).abs() < 1e-6);
+        // walls are net of door openings
+        assert!((r.phases.iter().map(|p| p.cost_usd).sum::<f64>() - 29442.46).abs() < 1e-6);
     }
     #[test]
     fn json_round_trip_matches_struct() {
@@ -233,11 +247,19 @@ mod tests {
             .advisories
             .iter()
             .any(|a| a.rule_id == "rule_set.mismatch"));
-        assert!((ok.total_cost_usd - 30204.76).abs() < 1e-6);
+        assert!((ok.total_cost_usd - 29442.46).abs() < 1e-6);
         p.rule_set = "IBC-2024".into();
         let r = build(&p, Some(&rs)).unwrap();
         assert_eq!(r.advisories[0].rule_id, "rule_set.mismatch");
         assert_eq!(r.advisories.len(), ok.advisories.len() + 1);
+    }
+    #[test]
+    fn unpriced_cost_code_is_flagged() {
+        let mut p = Project::sample();
+        p.elements[0].cost_code = "Z9999".into();
+        let r = build(&p, None).unwrap();
+        assert_eq!(r.advisories.len(), 1);
+        assert_eq!(r.advisories[0].rule_id, "cost.missing_rate");
     }
     #[test]
     fn invalid_project_is_error() {

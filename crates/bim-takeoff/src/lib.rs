@@ -22,11 +22,22 @@ pub struct Line {
     pub lod: Lod,
 }
 
-pub fn quantity(e: &Element) -> (f32, Unit) {
+/// Walls are measured net of their door openings.
+pub fn quantity(p: &Project, e: &Element) -> (f32, Unit) {
     match &e.kind {
         ElementKind::Wall {
             start, end, height, ..
-        } => (start.distance(*end) * height, Unit::M2),
+        } => {
+            let openings: f32 = p
+                .openings_in(e.id)
+                .iter()
+                .map(|(_, w, h)| w * h.min(*height))
+                .sum();
+            (
+                (start.distance(*end) * height - openings).max(0.0),
+                Unit::M2,
+            )
+        }
         ElementKind::Slab {
             size_x,
             size_z,
@@ -58,7 +69,7 @@ pub fn takeoff(p: &Project) -> Vec<Line> {
     p.elements
         .iter()
         .map(|e| {
-            let (qty, unit) = quantity(e);
+            let (qty, unit) = quantity(p, e);
             let unit_cost = p.unit_costs.get(&e.cost_code).copied().unwrap_or_default();
             Line {
                 element: e.id,
@@ -92,13 +103,28 @@ pub fn cumulative(lines: &[Line], started: impl Fn(PhaseId) -> bool) -> Cents {
         .sum()
 }
 
+/// RFC 4180 field: quoted when needed; a leading =,+,-,@ (or tab/CR) is
+/// prefixed with ' so spreadsheets do not evaluate it as a formula.
+pub fn csv_field(v: &str) -> String {
+    let v = if v.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("'{v}")
+    } else {
+        v.to_string()
+    };
+    if v.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", v.replace('"', "\"\""))
+    } else {
+        v
+    }
+}
+
 pub fn to_csv(lines: &[Line]) -> String {
     let mut s = String::from("element,cost_code,phase,qty,unit,cost_usd,lod\n");
     for l in lines {
         s.push_str(&format!(
             "{},{},{},{:.3},{:?},{:.2},{:?}\n",
-            l.name.replace(',', " "),
-            l.cost_code,
+            csv_field(&l.name),
+            csv_field(&l.cost_code),
             l.phase.0,
             l.qty,
             l.unit,
@@ -123,6 +149,21 @@ mod tests {
         assert_eq!(by[&PhaseId(3)], Cents(2 * 85_000 + 420_000 + 100_800)); // 2 doors + 3.5 m stair + 2.88 m2 ramp
         assert_eq!(to_csv(&t).lines().count(), t.len() + 1);
         assert_eq!(cumulative(&t, |ph| ph == PhaseId(3)), by[&PhaseId(3)]);
+    }
+    #[test]
+    fn wall_area_is_net_of_doors() {
+        let p = Project::sample();
+        let south = p.elements.iter().find(|e| e.name == "South wall").unwrap();
+        let (q, _) = quantity(&p, south);
+        assert!((q - (36.0 - 0.75 * 2.1)).abs() < 1e-4, "{q}");
+    }
+    #[test]
+    fn csv_quotes_and_defuses_formulas() {
+        assert_eq!(csv_field("a,b"), "\"a,b\"");
+        assert_eq!(csv_field("say \"hi\""), "\"say \"\"hi\"\"\"");
+        assert_eq!(csv_field("=HYPERLINK(1)"), "'=HYPERLINK(1)");
+        assert_eq!(csv_field("-1+2,3"), "\"'-1+2,3\"");
+        assert_eq!(csv_field("B2010"), "B2010");
     }
     #[test]
     fn missing_cost_code_is_zero() {

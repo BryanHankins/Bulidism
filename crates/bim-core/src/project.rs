@@ -107,6 +107,15 @@ impl Project {
                 )));
             }
         }
+        let mut ids = std::collections::HashSet::new();
+        for e in &self.elements {
+            if !ids.insert(e.id) {
+                errs.push(ProjectError::Invalid(format!(
+                    "element '{}' reuses id {}",
+                    e.name, e.id.0
+                )));
+            }
+        }
         for e in &self.elements {
             if self.phase(e.phase).is_none() {
                 errs.push(ProjectError::Invalid(format!(
@@ -524,6 +533,15 @@ mod tests {
         assert_eq!(errs.len(), 2, "{errs:?}");
         assert!(errs.iter().any(|e| e.contains("negative offset")));
         assert!(errs.iter().any(|e| e.contains("overlapping")));
+    }
+    #[test]
+    fn validate_rejects_duplicate_element_id() {
+        let mut p = Project::sample();
+        let mut dup = p.elements[0].clone();
+        dup.name = "copy".into();
+        p.add(dup);
+        let errs = p.validate();
+        assert_eq!(errs.len(), 1, "{errs:?}");
     }
     #[test]
     fn space_area_follows_bounds() {

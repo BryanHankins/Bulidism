@@ -1,12 +1,12 @@
 # buildsim — browser 3D construction planning engine (Rust/WASM)
 
-Prototype v0.6 (Phase 1 in progress). See COMPLETION_STATUS.docx for done vs open.
+Prototype v0.7 (Phase 1 in progress). See COMPLETION_STATUS.docx for done vs open.
 
 ## Layout
 - crates/bim-core      IFC-aligned model, JSON I/O, validate(), Project::sample()
 - crates/bim-geom      oriented wall/beam boxes with door cut-outs, stepped stairs, ramp wedges, clash detection (AABB sweep + exact rotated-footprint overlap)
 - crates/bim-schedule  phase DAG (Kahn), CPM critical path, per-element 4D start days
-- crates/bim-rules     data-driven advisory rules (rules/IN-2026.json: 5 draft rules, citations only)
+- crates/bim-rules     data-driven advisory rules (rules/IN-2026.json: 10 draft rules, citations only)
 - crates/bim-takeoff   quantities, cents-based costing, phase roll-up, CSV
 - crates/bim-report    ONE pipeline entry point (validate → schedule → rules → clashes → takeoff → meshes) → Report JSON; shared by CLI and wasm
 - crates/bim-wasm      wasm-bindgen exports: run(project_json, rules_json), validate, sample_project, new_project, schema_version
@@ -16,7 +16,7 @@ Prototype v0.6 (Phase 1 in progress). See COMPLETION_STATUS.docx for done vs ope
 - web/                 live editor app: select/property panel, click-to-place walls, columns and doors (doors snap onto the wall you click), drag-to-move, undo/redo (Ctrl+Z/Y), Delete key, phase Gantt, CSV + standalone-HTML report export, JSON tab — index.html + app.js + viewer.js/css (shared with the static report) + vendored three.js; needs web/pkg from wasm-pack (see web/README.md)
 
 ## Verified (Rust 1.75, Ubuntu 24.04)
-    cargo test --workspace            # 38 tests pass (bim-wasm exports are exercised natively)
+    cargo test --workspace            # all tests pass (bim-wasm exports are exercised natively)
     cargo clippy --workspace --all-targets -- -D warnings   # clean
     cargo run -p bim-cli -- assets/sample_office.json --csv takeoff.csv --html report.html
 
