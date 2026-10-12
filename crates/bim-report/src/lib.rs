@@ -69,6 +69,8 @@ pub struct Report {
     pub code_edition: String,
     pub rules_verified: String,
     pub total_days: u32,
+    /// Exact sum of element costs (summed in cents, then converted).
+    pub total_cost_usd: f64,
     pub phases: Vec<PhaseOut>,
     pub elements: Vec<ElementOut>,
     pub clashes: Vec<ClashOut>,
@@ -145,7 +147,24 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
             rs.id.clone(),
             rs.code_edition.clone(),
             rs.verified.clone(),
-            rs.evaluate(project),
+            {
+                let mut adv = Vec::new();
+                // a rule file for another jurisdiction must not pass silently
+                if rs.id != project.rule_set {
+                    adv.push(bim_rules::Advisory {
+                        rule_id: "rule_set.mismatch".into(),
+                        cite: String::new(),
+                        severity: bim_rules::Severity::Warning,
+                        subject: project.name.clone(),
+                        message: format!(
+                            "project specifies rule set '{}' but was evaluated against '{}'",
+                            project.rule_set, rs.id
+                        ),
+                    });
+                }
+                adv.extend(rs.evaluate(project));
+                adv
+            },
         ),
         None => ("none".into(), "no rule file".into(), "n/a".into(), vec![]),
     };
@@ -167,6 +186,7 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
         code_edition,
         rules_verified,
         total_days: schedule.total_days,
+        total_cost_usd: lines.iter().map(|l| l.cost).sum::<Cents>().dollars(),
         phases,
         elements,
         clashes,
@@ -208,6 +228,21 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
         assert_eq!(v["total_days"], 57);
         assert_eq!(v["elements"].as_array().unwrap().len(), 12);
+    }
+    #[test]
+    fn rule_set_mismatch_is_flagged() {
+        let rs = bim_rules::RuleSet::from_json(RS).unwrap();
+        let mut p = Project::sample();
+        let ok = build(&p, Some(&rs)).unwrap();
+        assert!(!ok
+            .advisories
+            .iter()
+            .any(|a| a.rule_id == "rule_set.mismatch"));
+        assert!((ok.total_cost_usd - 30204.76).abs() < 1e-6);
+        p.rule_set = "IBC-2024".into();
+        let r = build(&p, Some(&rs)).unwrap();
+        assert_eq!(r.advisories[0].rule_id, "rule_set.mismatch");
+        assert_eq!(r.advisories.len(), ok.advisories.len() + 1);
     }
     #[test]
     fn invalid_project_is_error() {

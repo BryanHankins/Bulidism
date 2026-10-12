@@ -57,3 +57,32 @@ fn invalid_project_exits_nonzero() {
     let (ok, _, err) = run(&[bad.to_str().unwrap()]);
     assert!(!ok && err.contains("validation error"), "{err}");
 }
+
+#[test]
+fn explicit_missing_rules_fails() {
+    let (ok, _, err) = run(&["--rules", "rules/NOPE.json"]);
+    assert!(!ok && err.contains("cannot load rules"), "{err}");
+}
+
+#[test]
+fn default_rules_follow_project_rule_set() {
+    let dir = std::env::temp_dir().join("bim-cli-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("ibc.json");
+    let src = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/sample_office.json"
+    ))
+    .unwrap()
+    .replace("\"IN-2026\"", "\"IBC-2024\"");
+    std::fs::write(&p, src).unwrap();
+    // no rules/IBC-2024.json ships: warn and skip, never silently apply IN-2026
+    let (ok, out, err) = run(&[p.to_str().unwrap()]);
+    assert!(ok, "{err}");
+    assert!(err.contains("rules/IBC-2024.json"), "{err}");
+    assert!(!out.contains("Advisories"), "{out}");
+    // forcing another jurisdiction's file is allowed but flagged
+    let (ok, out, err) = run(&[p.to_str().unwrap(), "--rules", "rules/IN-2026.json"]);
+    assert!(ok, "{err}");
+    assert!(out.contains("evaluated against 'IN-2026'"), "{out}");
+}

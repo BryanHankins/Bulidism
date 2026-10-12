@@ -4,7 +4,7 @@ import init, * as bim from './pkg/bim_wasm.js';
 const $ = id => document.getElementById(id);
 // user-supplied strings (names, cost codes) go into innerHTML: always escape
 const esc = v => String(v).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
-let project = null, rules = null, lastDay = 0, selectedId = null, placing = null, placeStart = null, lastReport = null;
+let project = null, rules = null, rulesId = null, lastDay = 0, selectedId = null, placing = null, placeStart = null, lastReport = null;
 const undoStack = [], redoStack = [];
 function snapshot() { if (project) { undoStack.push(JSON.stringify(project)); if (undoStack.length > 50) undoStack.shift(); redoStack.length = 0; updateUndo(); } }
 function updateUndo() { $('undo').disabled = !undoStack.length; $('redo').disabled = !redoStack.length; }
@@ -33,7 +33,14 @@ const KINDS = {
 function uuid(){ return crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return (c==='x'?r:(r&3|8)).toString(16)}); }
 function status(t){ $('status').textContent = t; }
 
+// Rules follow project.rule_set; a missing file means no advisories, never another jurisdiction's.
+async function loadRules(id) {
+  rulesId = id; rules = null;
+  try { const r = await fetch(`rules/${encodeURIComponent(id)}.json`); if (r.ok) rules = await r.text(); } catch (_) { /* offline: run without rules */ }
+}
+
 function rerun(keepDay = true) {
+  if (rulesId !== project.rule_set) { loadRules(project.rule_set).then(() => rerun(keepDay)); return; }
   $('runErr').textContent = '';
   try {
     const t0 = performance.now();
@@ -43,7 +50,7 @@ function rerun(keepDay = true) {
       ? report.spaces.map(s => `<div class="row"><span>${esc(s.name)} <small style="color:var(--muted)">${s.occupancy}</small></span><span>${s.area_m2.toFixed(1)} m² · ${s.exits} exit${s.exits===1?'':'s'}</span></div>`).join('')
       : '<div class="row"><span>No spaces defined</span></div>';
     renderReport(report, { day: keepDay ? Math.min(lastDay, report.total_days) : 0, selected: selectedId, onClick: onViewClick, onMove: onViewMove, onHandle: onViewHandle, handlesFor, onDay: d => lastDay = d });
-    status(`ran in ${(performance.now()-t0).toFixed(1)} ms · schema v${bim.schema_version()}`);
+    status(`ran in ${(performance.now()-t0).toFixed(1)} ms · schema v${bim.schema_version()}${rules ? '' : ` · no rule file for '${project.rule_set}', advisories skipped`}`);
   } catch (e) {
     $('runErr').textContent = String(e);
   }
@@ -250,7 +257,6 @@ document.querySelectorAll('.tabs .btn').forEach(b => b.onclick = () => selectTab
 (async () => {
   try {
     await init();
-    rules = await (await fetch('rules/IN-2026.json')).text();
     project = JSON.parse(bim.sample_project());
     rerun(false);
   } catch (e) { $('runErr').textContent = 'Failed to start: ' + e + '\n(Build the wasm first — see web/README.md.)'; }

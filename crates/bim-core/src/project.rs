@@ -180,6 +180,12 @@ impl Project {
                             },
                         ..
                     }) => {
+                        if *offset < 0.0 {
+                            errs.push(ProjectError::Invalid(format!(
+                                "door '{}' has a negative offset",
+                                e.name
+                            )));
+                        }
                         if offset + width > start.distance(*end) + 1e-4 {
                             errs.push(ProjectError::Invalid(format!(
                                 "door '{}' extends past its host wall",
@@ -198,6 +204,17 @@ impl Project {
                         e.name
                     ))),
                     Err(err) => errs.push(err),
+                }
+            }
+        }
+        for w in &self.elements {
+            if let ElementKind::Wall { .. } = w.kind {
+                let ops = self.openings_in(w.id);
+                if ops.windows(2).any(|p| p[1].0 < p[0].0 + p[0].1 - 1e-4) {
+                    errs.push(ProjectError::Invalid(format!(
+                        "wall '{}' has overlapping door openings",
+                        w.name
+                    )));
                 }
             }
         }
@@ -479,6 +496,34 @@ mod tests {
         ));
         let errs = p.validate();
         assert_eq!(errs.len(), 2, "{errs:?}");
+    }
+    #[test]
+    fn validate_rejects_overlapping_and_negative_doors() {
+        let mut p = Project::sample();
+        let wall = p
+            .elements
+            .iter()
+            .find(|e| e.name == "South wall")
+            .unwrap()
+            .id;
+        for (name, offset) in [("overlap", 5.2), ("negative", -0.5)] {
+            p.add(Element::new(
+                name,
+                ElementKind::Door {
+                    host: wall,
+                    offset,
+                    width: 0.9,
+                    height: 2.1,
+                    is_egress: false,
+                },
+                Discipline::Architectural,
+                PhaseId(3),
+            ));
+        }
+        let errs: Vec<String> = p.validate().iter().map(|e| e.to_string()).collect();
+        assert_eq!(errs.len(), 2, "{errs:?}");
+        assert!(errs.iter().any(|e| e.contains("negative offset")));
+        assert!(errs.iter().any(|e| e.contains("overlapping")));
     }
     #[test]
     fn space_area_follows_bounds() {

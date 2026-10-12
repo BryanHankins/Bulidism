@@ -329,7 +329,8 @@ pub fn mesh_for(project: &Project, e: &Element) -> Result<Mesh, GeomError> {
                         y1,
                     ));
                 }
-                cursor = off + w;
+                // overlapping openings must never move the cursor backwards over a gap
+                cursor = cursor.max(off + w);
             }
             if cursor < len {
                 m.append(oriented_segment(
@@ -501,6 +502,33 @@ mod tests {
             (b.max.x - (4.0 + 0.1 * std::f32::consts::FRAC_1_SQRT_2)).abs() < 1e-3
                 && (b.max.z - (4.0 + 0.1 * std::f32::consts::FRAC_1_SQRT_2)).abs() < 1e-3,
             "{b:?}"
+        );
+    }
+    #[test]
+    fn nested_door_does_not_refill_opening() {
+        let mut p = Project::sample();
+        let wall = by_name(&p, "South wall").id;
+        // inside the 5.0..5.75 main entry: cursor must stay at 5.75
+        p.add(Element::new(
+            "inner",
+            ElementKind::Door {
+                host: wall,
+                offset: 5.1,
+                width: 0.3,
+                height: 2.1,
+                is_egress: false,
+            },
+            Discipline::Architectural,
+            PhaseId(3),
+        ));
+        let m = mesh_for(&p, by_name(&p, "South wall")).unwrap();
+        // no wall vertex strictly inside the opening below the door head
+        assert!(
+            !m.positions
+                .iter()
+                .any(|v| v.x > 5.0 + 1e-3 && v.x < 5.75 - 1e-3 && v.y < 0.2 + 2.1 - 1e-3),
+            "{:?}",
+            m.positions
         );
     }
     #[test]
