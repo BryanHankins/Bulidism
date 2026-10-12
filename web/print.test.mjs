@@ -1,0 +1,52 @@
+// node --test web/print.test.mjs
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { printHtml } from './print.js';
+
+const report = (over = {}) => ({
+  project: 'Clinic <b>A</b>', rule_set: 'IN-2026', code_edition: '2026 IBC', rules_verified: 'partial', rules_reviewer: null,
+  total_days: 20, total_cost_usd: 1234.5,
+  phases: [{ id: 0, name: 'Shell', start_day: 0, end_day: 20, critical: true, cost_usd: 1234.5 }],
+  elements: [{ id: 'a', name: 'Wall 1' }, { id: 'b', name: 'Col <1>' }],
+  clashes: [{ a: 'a', b: 'b', overlap_m3: 0.15 }],
+  advisories: [
+    { rule_id: 'door.min_height', cite: '§1010', severity: 'warning', subject: 'D1', message: 'short' },
+    { rule_id: 'egress', cite: '§1010.1.1', severity: 'error', subject: '<img onerror=x>', message: `2'-3" < 2'-8"` },
+  ],
+  rules_checked: [
+    { id: 'egress', cite: '§1010.1.1', severity: 'error', verified: '2026-09-27 ICC', findings: 1 },
+    { id: 'ramp', cite: '§1012', severity: 'error', verified: 'secondary source only', findings: 0 },
+  ],
+  spaces: [{ name: 'Office', occupancy: 'Business', area_m2: 96, exits: 2, occupant_load: 7 }],
+  ...over,
+});
+
+test('escapes every model string', () => {
+  const h = printHtml(report(), 'imperial', new Date(2026, 9, 12));
+  assert.ok(!h.includes('<img onerror') && !h.includes('<b>A</b>') && !h.includes('Col <1>'));
+  assert.ok(h.includes('&#60;img onerror=x&#62;') && h.includes('Col &#60;1&#62;'));
+});
+
+test('errors first, units, totals, verification, sign-off', () => {
+  const h = printHtml(report(), 'imperial', new Date(2026, 9, 12));
+  assert.ok(h.indexOf('&#60;img') < h.indexOf('>D1<'), 'errors sorted before warnings');
+  assert.ok(h.includes('1,033 sf') && h.includes('5.3 cf') && h.includes('$1,234.50'));
+  assert.ok(h.includes('No findings') && h.includes('class="unverified">secondary source only'));
+  assert.ok(h.includes('not been reviewed by a licensed professional'));
+  assert.ok(h.includes('October 12, 2026') && h.includes('License no.'));
+  assert.ok(printHtml(report(), 'metric').includes('96.0 m²'));
+});
+
+test('page footer is a safe CSS string', () => {
+  const h = printHtml(report({ project: 'A "quoted" \\ name</style><script>' }), 'metric');
+  const css = h.slice(h.indexOf('<style>'), h.indexOf('</style>'));
+  assert.ok(css.includes('content: "A \\"quoted\\" \\\\ name /style> script>'), css.slice(0, 400));
+  assert.equal((h.match(/<\/style>/g) || []).length, 1);
+});
+
+test('empty states and a reviewed rule set', () => {
+  const h = printHtml(report({ advisories: [], clashes: [], spaces: [], rules_checked: [], rules_reviewer: 'J. Doe, RA' }), 'metric');
+  assert.ok(h.includes('No findings from this rule set.') && h.includes('No rule file was loaded'));
+  assert.ok(h.includes('No cross-discipline clashes.') && h.includes('No spaces defined.'));
+  assert.ok(h.includes('reviewed by J. Doe, RA') && !h.includes('not been reviewed'));
+});

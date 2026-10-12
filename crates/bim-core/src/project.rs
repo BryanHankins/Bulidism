@@ -107,6 +107,13 @@ impl Project {
                 )));
             }
         }
+        let mut codes: Vec<_> = self.unit_costs.iter().filter(|(_, c)| c.0 < 0).collect();
+        codes.sort();
+        for (code, _) in codes {
+            errs.push(ProjectError::Invalid(format!(
+                "unit cost for '{code}' is negative"
+            )));
+        }
         let mut ids = std::collections::HashSet::new();
         for e in &self.elements {
             if !ids.insert(e.id) {
@@ -533,6 +540,13 @@ mod tests {
         assert_eq!(errs.len(), 2, "{errs:?}");
         assert!(errs.iter().any(|e| e.contains("negative offset")));
         assert!(errs.iter().any(|e| e.contains("overlapping")));
+    }
+    #[test]
+    fn validate_rejects_negative_unit_cost() {
+        let mut p = Project::sample();
+        p.unit_costs.insert("B2010".into(), Cents(-1));
+        let errs = p.validate();
+        assert_eq!(errs.len(), 1, "{errs:?}");
     }
     #[test]
     fn validate_rejects_duplicate_element_id() {

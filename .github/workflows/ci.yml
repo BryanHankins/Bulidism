@@ -9,6 +9,7 @@ jobs:
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo fmt --all -- --check
+      - run: node --test web/units.test.mjs web/print.test.mjs web/costs.test.mjs
       - run: cargo install cargo-deny --locked && cargo deny check licenses
   wasm:
     runs-on: ubuntu-latest

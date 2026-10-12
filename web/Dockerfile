@@ -17,5 +17,5 @@ COPY web/ /usr/share/nginx/html/
 COPY rules/ /usr/share/nginx/html/rules/
 COPY --from=wasm /out/pkg /usr/share/nginx/html/pkg
 COPY web/nginx.conf /etc/nginx/conf.d/default.conf
-RUN rm -f /usr/share/nginx/html/Dockerfile /usr/share/nginx/html/nginx.conf /usr/share/nginx/html/README.md
+RUN rm -f /usr/share/nginx/html/Dockerfile /usr/share/nginx/html/nginx.conf /usr/share/nginx/html/README.md /usr/share/nginx/html/*.test.mjs
 EXPOSE 80

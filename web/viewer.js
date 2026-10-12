@@ -24,6 +24,7 @@ const cam=new THREE.PerspectiveCamera(45,1,0.1,500);
 S.add(new THREE.HemisphereLight(0xffffff,0x8a8070,0.9)); const sun=new THREE.DirectionalLight(0xffffff,0.8); sun.position.set(20,30,10); S.add(sun);
 const bb=new THREE.Box3(); const meshes=[];
 for(const e of D.elements){
+  if(!e.indices.length) continue; // external-mesh elements: costed/scheduled, nothing to draw
   const g=new THREE.BufferGeometry();
   g.setAttribute('position',new THREE.Float32BufferAttribute(e.positions,3));
   g.setAttribute('normal',new THREE.Float32BufferAttribute(e.normals,3));
@@ -87,7 +88,8 @@ const ro=new ResizeObserver(resize); ro.observe(canvas.parentElement); resize();
 
 let day=0, playing=false, last=0;
 function setDay(d){day=Math.max(0,Math.min(D.total_days,d));$('slider').value=day;$('day').textContent=day;
-  let cost=0; for(const m of meshes){const on=day>=m.userData.start_day;m.visible=on;if(on)cost+=m.userData.cost_usd;}
+  for(const m of meshes)m.visible=day>=m.userData.start_day;
+  let cost=0; for(const e of D.elements)if(day>=e.start_day)cost+=e.cost_usd;
   $('cost').textContent=cost.toLocaleString(undefined,{minimumFractionDigits:2});
   const n=$('ganttNow'); if(n)n.style.left=(100*day/Math.max(1,D.total_days))+'%';
   if(opts.onDay)opts.onDay(day);}

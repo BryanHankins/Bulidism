@@ -1,17 +1,45 @@
 // Live editor: JS owns the project JSON; every edit re-runs the Rust pipeline in wasm.
 import init, * as bim from './pkg/bim_wasm.js';
+import { printHtml } from './print.js';
+import { costRows, perLabel, rateOut, rateIn, parseDollars, ratesToCsv, parseRatesCsv } from './costs.js';
+import { snapStep, lenToInput, parseLen, fmtArea, areaToInput, parseArea, qtyOut, convertMessage } from './units.js';
 
 const $ = id => document.getElementById(id);
 // user-supplied strings (names, cost codes) go into innerHTML: always escape
 const esc = v => String(v).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
 let project = null, rules = null, rulesId = null, lastDay = 0, selectedId = null, placing = null, placeStart = null, lastReport = null;
 const undoStack = [], redoStack = [];
+const store = { get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); return true; } catch (_) { return false; } } };
+// display units only; the engine stays metric
+let units = store.get('buildsim.units') || (navigator.language === 'en-US' ? 'imperial' : 'metric');
+const AUTOSAVE_KEY = 'buildsim.autosave.v1';
+let notice = '';
+// synchronous on every change: a debounce loses the last edit when the tab closes or reloads
+function autosave() {
+  if (!store.set(AUTOSAVE_KEY, JSON.stringify({ saved_at: new Date().toISOString(), project }))) status($('status').textContent + ' · autosave unavailable');
+}
+/** Last autosaved project if it still loads (right schema). It may fail validation: restore it
+ * anyway so the user sees the errors instead of silently losing their work to the sample. */
+function restoreAutosave() {
+  try {
+    const s = JSON.parse(store.get(AUTOSAVE_KEY));
+    if (!s || !s.project) return null;
+    bim.validate(JSON.stringify(s.project)); // throws on bad JSON shape or schema version
+    return s;
+  } catch (_) { return null; }
+}
+const isLen = n => n !== 'riser_count';
+/** <input> for a length in the current display units. */
+const lenInput = (attrs, m) => units === 'imperial'
+  ? `<input ${attrs} type="text" inputmode="decimal" value="${esc(lenToInput(m, units))}">`
+  : `<input ${attrs} type="number" step="0.05" value="${esc(lenToInput(m, units))}">`;
+const badLen = v => { $('runErr').textContent = `Could not read length "${v}"` + (units === 'imperial' ? ` — try 3'-6", 42" or 3.5'` : ''); };
 function snapshot() { if (project) { undoStack.push(JSON.stringify(project)); if (undoStack.length > 50) undoStack.shift(); redoStack.length = 0; updateUndo(); } }
 function updateUndo() { $('undo').disabled = !undoStack.length; $('redo').disabled = !redoStack.length; }
 function undo() { if (!undoStack.length) return; redoStack.push(JSON.stringify(project)); project = JSON.parse(undoStack.pop()); if (!project.elements.some(e => e.id === selectedId)) selectedId = null; updateUndo(); rerun(); }
 function redo() { if (!redoStack.length) return; undoStack.push(JSON.stringify(project)); project = JSON.parse(redoStack.pop()); updateUndo(); rerun(); }
-const SNAP = 0.5;
-const snap = v => Math.round(v / SNAP) * SNAP;
+const step = () => snapStep(units);
+const snap = v => Math.round(v / step()) * step();
 
 const KINDS = {
   Wall:   { fields: { sx:['start x',0], sz:['start z',0], ex:['end x',6], ez:['end z',0], height:['height',3], thickness:['thickness',0.25] },
@@ -45,16 +73,19 @@ function rerun(keepDay = true) {
   try {
     const t0 = performance.now();
     const report = JSON.parse(bim.run(JSON.stringify(project), rules));
+    for (const a of report.advisories) a.message = convertMessage(a.message, units);
     lastReport = report;
     $('spaceList').innerHTML = report.spaces.length
-      ? report.spaces.map(s => `<div class="row"><span>${esc(s.name)} <small style="color:var(--muted)">${s.occupancy}</small></span><span>${s.area_m2.toFixed(1)} m² · ${s.exits} exit${s.exits===1?'':'s'}</span></div>`).join('')
+      ? report.spaces.map(s => `<div class="row"><span>${esc(s.name)} <small style="color:var(--muted)">${s.occupancy}</small></span><span>${fmtArea(s.area_m2, units)} · ${s.exits} exit${s.exits===1?'':'s'}</span></div>`).join('')
       : '<div class="row"><span>No spaces defined</span></div>';
     renderReport(report, { day: keepDay ? Math.min(lastDay, report.total_days) : 0, selected: selectedId, onClick: onViewClick, onMove: onViewMove, onHandle: onViewHandle, handlesFor, onDay: d => lastDay = d });
-    status(`ran in ${(performance.now()-t0).toFixed(1)} ms · schema v${bim.schema_version()}${rules ? '' : ` · no rule file for '${project.rule_set}', advisories skipped`}`);
+    status(`ran in ${(performance.now()-t0).toFixed(1)} ms · schema v${bim.schema_version()}${rules ? '' : ` · no rule file for '${project.rule_set}', advisories skipped`}${notice}`);
+    notice = '';
   } catch (e) {
     $('runErr').textContent = String(e);
   }
-  renderEditor(); renderProps(); renderSpaces(); $('jsonBox').value = JSON.stringify(project, null, 2);
+  renderEditor(); renderProps(); renderSpaces(); renderCosts(); $('jsonBox').value = JSON.stringify(project, null, 2);
+  autosave();
 }
 
 
@@ -66,19 +97,21 @@ function renderProps() {
   const e = selectedEl(); $('selPanel').hidden = !e; if (!e) return;
   const kind = Object.keys(e.kind)[0], k = e.kind[kind];
   const phases = project.phases.map(p => `<option value="${p.id}" ${p.id===e.phase?'selected':''}>${esc(p.name)}</option>`).join('');
-  let h = `<label class="full">Name<input name="name" value="${esc(e.name)}"></label><label>Phase<select name="phase">${phases}</select></label><label>Offset days<input name="start_offset_days" type="number" min="0" value="${e.start_offset_days||0}"></label><label>Cost code<input name="cost_code" value="${esc(e.cost_code)}"></label><label>Discipline<select name="discipline">${['Architectural','Structural','Mechanical','Electrical','Plumbing','Site'].map(d=>`<option ${d===e.discipline?'selected':''}>${d}</option>`).join('')}</select></label>`;
-  for (const v of VEC[kind]) h += ['x','y','z'].map((ax,i) => `<label>${v} ${ax}<input name="${v}.${i}" type="number" step="0.05" value="${k[v][i]}"></label>`).join('');
-  for (const n of NUMERIC[kind]) h += `<label>${n}<input name="${n}" type="number" step="${n==='riser_count'?1:0.05}" value="${k[n]}"></label>`;
+  let h = `<label class="full">Name<input name="name" value="${esc(e.name)}"></label><label>Phase<select name="phase">${phases}</select></label><label>Offset days<input name="start_offset_days" type="number" min="0" value="${e.start_offset_days||0}"></label><label>Cost code<input name="cost_code" list="costCodes" value="${esc(e.cost_code)}"></label><label>Discipline<select name="discipline">${['Architectural','Structural','Mechanical','Electrical','Plumbing','Site'].map(d=>`<option ${d===e.discipline?'selected':''}>${d}</option>`).join('')}</select></label>`;
+  for (const v of VEC[kind]) h += ['x','y','z'].map((ax,i) => `<label>${v} ${ax}${lenInput(`name="${v}.${i}"`, k[v][i])}</label>`).join('');
+  for (const n of NUMERIC[kind]) h += isLen(n) ? `<label>${n}${lenInput(`name="${n}"`, k[n])}</label>` : `<label>${n}<input name="${n}" type="number" step="1" value="${k[n]}"></label>`;
   if (kind === 'Door') h += `<label>egress<select name="is_egress"><option value="1" ${k.is_egress?'selected':''}>yes</option><option value="" ${!k.is_egress?'selected':''}>no</option></select></label>`;
   $('propForm').innerHTML = h;
   $('propForm').querySelectorAll('input,select').forEach(inp => inp.onchange = () => {
-    snapshot();
     const n = inp.name, val = inp.value;
+    const len = (n.includes('.') || (n in k && isLen(n) && n !== 'is_egress')) ? parseLen(val, units) : null;
+    if (Number.isNaN(len)) { badLen(val); renderProps(); return; }
+    snapshot();
     if (n === 'name' || n === 'cost_code' || n === 'discipline') e[n] = val;
     else if (n === 'phase' || n === 'start_offset_days') e[n] = +val;
     else if (n === 'is_egress') k.is_egress = !!val;
-    else if (n.includes('.')) { const [v,i] = n.split('.'); k[v][+i] = +val; }
-    else k[n] = n === 'riser_count' ? Math.max(1, Math.round(+val)) : +val;
+    else if (n.includes('.')) { const [v,i] = n.split('.'); k[v][+i] = len; }
+    else k[n] = n === 'riser_count' ? Math.max(1, Math.round(+val)) : len;
     rerun();
   });
 }
@@ -120,15 +153,17 @@ function renderSpaces() {
       <div style="display:flex;gap:6px"><input data-sp="${i}" data-f="name" value="${esc(s.name)}" style="flex:1"><button data-del="${i}" class="btn">✕</button></div>
       <label class="chk">Occupancy<select data-sp="${i}" data-f="occupancy">${opts}</select></label>
       <label class="chk" style="font-size:12px"><input type="checkbox" data-sp="${i}" data-f="useBounds" ${b ? 'checked' : ''}> area from plan rectangle</label>
-      ${b ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">${['x','z','size x','size z'].map((l, j) => `<label style="font-size:11px;color:var(--muted)">${l}<input type="number" step="0.5" data-sp="${i}" data-b="${j}" value="${b[j]}" style="width:100%"></label>`).join('')}</div>`
-          : `<label class="chk" style="font-size:12px">Area m²<input type="number" step="1" data-sp="${i}" data-f="floor_area_m2" value="${s.floor_area_m2}" style="width:80px"></label>`}
+      ${b ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">${['x','z','size x','size z'].map((l, j) => `<label style="font-size:11px;color:var(--muted)">${l}${lenInput(`data-sp="${i}" data-b="${j}" style="width:100%"`, b[j])}</label>`).join('')}</div>`
+          : `<label class="chk" style="font-size:12px">Area ${units === 'imperial' ? 'sf' : 'm²'}<input type="number" step="1" data-sp="${i}" data-f="floor_area_m2" value="${areaToInput(s.floor_area_m2, units)}" style="width:80px"></label>`}
       <div style="margin-top:6px;font-size:11px;color:var(--muted)">Egress doors</div>${exits}</div>`;
   }).join('') + '<button class="btn" id="addSpace">+ space</button>';
   $('spaceEdit').querySelectorAll('[data-f],[data-b]').forEach(inp => inp.onchange = () => {
+    const v = inp.dataset.b !== undefined ? parseLen(inp.value, units) : inp.dataset.f === 'floor_area_m2' ? parseArea(inp.value, units) : 0;
+    if (Number.isNaN(v)) { badLen(inp.value); renderSpaces(); return; }
     snapshot(); const sp = project.spaces[+inp.dataset.sp];
-    if (inp.dataset.b !== undefined) { sp.bounds[+inp.dataset.b] = +inp.value; sp.floor_area_m2 = sp.bounds[2] * sp.bounds[3]; }
+    if (inp.dataset.b !== undefined) { sp.bounds[+inp.dataset.b] = v; sp.floor_area_m2 = sp.bounds[2] * sp.bounds[3]; }
     else if (inp.dataset.f === 'useBounds') { sp.bounds = inp.checked ? [0, 0, Math.sqrt(sp.floor_area_m2) || 4, Math.sqrt(sp.floor_area_m2) || 4] : null; if (sp.bounds) sp.floor_area_m2 = sp.bounds[2] * sp.bounds[3]; }
-    else if (inp.dataset.f === 'floor_area_m2') sp.floor_area_m2 = +inp.value;
+    else if (inp.dataset.f === 'floor_area_m2') sp.floor_area_m2 = v;
     else sp[inp.dataset.f] = inp.value;
     rerun();
   });
@@ -141,6 +176,47 @@ function renderSpaces() {
   $('addSpace').onclick = () => { snapshot(); project.spaces.push({ name: `Space ${project.spaces.length+1}`, occupancy: 'Business', floor_area_m2: 50, egress_doors: [], bounds: null }); rerun(); };
 }
 $('showSpaces').onchange = e => window.__viewer.setSpacesVisible(e.target.checked);
+
+// ---- unit costs ----
+// takeoff unit per element kind; mirrors bim_takeoff::quantity
+const UNIT_OF = { Wall: 'M2', Slab: 'M3', Column: 'M3', Beam: 'M3', Door: 'Each', Stair: 'M', Ramp: 'M2', Mesh: 'Each' };
+function rateRows() {
+  return costRows(project.unit_costs, project.elements.map(e => ({ cost_code: e.cost_code, unit: UNIT_OF[Object.keys(e.kind)[0]] })));
+}
+function renderCosts() {
+  const rows = rateRows(), unitOf = code => (rows.find(r => r.code === code) || {}).unit || null;
+  const shown = (r) => r.cents == null ? '' : rateOut(r.cents, r.unit, units).toFixed(2);
+  $('costEdit').innerHTML = `<table class="costs"><thead><tr><th>Code</th><th>Used by</th><th>Rate</th><th></th></tr></thead><tbody>${rows.map(r => {
+    const per = perLabel(r.unit, units);
+    const used = r.count ? `${r.count} element${r.count === 1 ? '' : 's'}${r.mixed ? ' · <b title="one code used for different units; split it">mixed units</b>' : ''}` : 'unused';
+    const rate = r.code ? `$<input data-code="${esc(r.code)}" value="${shown(r)}" placeholder="${r.count ? 'missing' : ''}" inputmode="decimal"> ${per ? '/' + per : ''}` : '<small>give these a cost code</small>';
+    return `<tr${r.cents == null && r.count ? ' class="missing"' : ''}><td>${r.code ? esc(r.code) : '(none)'}</td><td>${used}</td><td>${rate}</td><td>${r.cents != null ? `<button class="btn" data-delcode="${esc(r.code)}" title="Remove rate">✕</button>` : ''}</td></tr>`;
+  }).join('')}</tbody></table>
+  <div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 12px"><input id="newCode" placeholder="code" size="8"><input id="newRate" placeholder="$ rate" size="7" inputmode="decimal"><button class="btn" id="addRate">Add</button><button class="btn" id="exportRates">Export CSV</button><button class="btn" id="importRates">Import CSV</button></div>`;
+  $('costCodes').innerHTML = rows.filter(r => r.code).map(r => `<option value="${esc(r.code)}">`).join('');
+  const bad = v => { $('runErr').textContent = `Enter a rate in dollars, like 12.50 (got "${v}")`; };
+  $('costEdit').querySelectorAll('input[data-code]').forEach(inp => inp.onchange = () => {
+    const r = rows.find(x => x.code === inp.dataset.code), v = inp.value.trim();
+    if (v === '' || v === shown(r)) { renderCosts(); return; } // unchanged: don't let display rounding drift the stored rate
+    const d = parseDollars(v); if (Number.isNaN(d)) { bad(v); renderCosts(); return; }
+    snapshot(); project.unit_costs[r.code] = rateIn(d, r.unit, units); rerun();
+  });
+  $('costEdit').querySelectorAll('[data-delcode]').forEach(b => b.onclick = () => { snapshot(); delete project.unit_costs[b.dataset.delcode]; rerun(); });
+  $('addRate').onclick = () => {
+    const code = $('newCode').value.trim(), v = $('newRate').value, d = parseDollars(v);
+    if (!code) { $('runErr').textContent = 'Enter a cost code.'; return; }
+    if (Number.isNaN(d)) { bad(v); return; }
+    snapshot(); project.unit_costs[code] = rateIn(d, unitOf(code), units); rerun();
+  };
+  $('exportRates').onclick = () => download(`${project.name.replace(/\W+/g,'_')}_rates.csv`, ratesToCsv(rows, units), 'text/csv');
+  $('importRates').onclick = () => $('ratesFile').click();
+}
+$('ratesFile').onchange = async ev => {
+  const f = ev.target.files[0]; ev.target.value = ''; if (!f) return;
+  const { rates, errors } = parseRatesCsv(await f.text());
+  if (errors.length) { $('runErr').textContent = 'Rates not imported:\n' + errors.join('\n'); return; }
+  snapshot(); Object.assign(project.unit_costs, rates); notice = ` · imported ${Object.keys(rates).length} rates`; rerun();
+};
 
 // ---- click-to-place ----
 function setPlacing(mode){ placing = mode; placeStart = null; window.__viewer.setMarker(null); $('placeMsg').textContent = mode === 'wall' ? 'click start point' : mode === 'column' ? 'click position' : mode === 'door' ? 'click a wall' : ''; document.body.style.cursor = mode ? 'crosshair' : ''; }
@@ -170,8 +246,14 @@ function download(name, text, type) { const a = document.createElement('a'); a.h
 $('exportCsv').onclick = () => {
   if (!lastReport) return;
   const rows = [['element','cost_code','phase','start_day','qty','unit','cost_usd'].join(',')]
-    .concat(lastReport.elements.map(e => [csvField(e.name), csvField(e.cost_code), e.phase, e.start_day, e.qty.toFixed(3), e.unit, e.cost_usd.toFixed(2)].join(',')));
+    .concat(lastReport.elements.map(e => { const [q, u] = qtyOut(e.qty, e.unit, units); return [csvField(e.name), csvField(e.cost_code), e.phase, e.start_day, q.toFixed(3), u, e.cost_usd.toFixed(2)].join(','); }));
   download(`${project.name.replace(/\W+/g,'_')}_takeoff.csv`, rows.join('\n'), 'text/csv');
+};
+$('printReport').onclick = () => {
+  if (!lastReport) return;
+  const w = window.open('', '_blank');
+  if (!w) { $('runErr').textContent = 'Allow pop-ups for this site to open the printable report.'; return; }
+  w.document.write(printHtml(lastReport, units)); w.document.close();
 };
 $('exportHtml').onclick = async () => {
   if (!lastReport) return;
@@ -203,11 +285,11 @@ function onViewClick({ id, point, ground }) {
     project.elements.push(e); selectedId = e.id; setPlacing(null); rerun(); return;
   }
   if (placing && ground) {
-    snapshot();
     const [x, z] = [snap(ground[0]), snap(ground[1])];
-    if (placing === 'column') { const e = newEl(`Column ${project.elements.length+1}`, { Column: { base:[x,0.2,z], width:0.4, depth:0.4, height:3.2 } }, 'Structural', 'B1010'); project.elements.push(e); selectedId = e.id; rerun(); return; }
+    if (placing === 'column') { snapshot(); const e = newEl(`Column ${project.elements.length+1}`, { Column: { base:[x,0.2,z], width:0.4, depth:0.4, height:3.2 } }, 'Structural', 'B1010'); project.elements.push(e); selectedId = e.id; rerun(); return; }
     if (!placeStart) { placeStart = [x, z]; window.__viewer.setMarker(placeStart); $('placeMsg').textContent = 'click end point (Esc cancels)'; return; }
-    if (Math.hypot(x - placeStart[0], z - placeStart[1]) < SNAP) return;
+    if (Math.hypot(x - placeStart[0], z - placeStart[1]) < step()) return;
+    snapshot();
     const e = newEl(`Wall ${project.elements.length+1}`, { Wall: { start:[placeStart[0],0.2,placeStart[1]], end:[x,0.2,z], height:3.0, thickness:0.25 } }, 'Architectural', 'B2010');
     project.elements.push(e); selectedId = e.id; setPlacing(null); rerun(); return;
   }
@@ -236,14 +318,16 @@ function renderEditor() {
     $('fields').innerHTML = `<label>Name<input name="name" value="${kindSel.value} ${project.elements.length+1}"></label><label>Phase<select name="phase">${phases}</select></label>` +
       Object.entries(k.fields).map(([n,[lbl,def]]) => def === 'wall' ? `<label>${lbl}<select name="${n}">${walls.map(w=>`<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select></label>` :
         def === 'bool' ? `<label>${lbl}<select name="${n}"><option value="1">yes</option><option value="">no</option></select></label>` :
-        `<label>${lbl}<input name="${n}" type="number" step="0.05" value="${def}"></label>`).join('');
+        isLen(n) ? `<label>${lbl}${lenInput(`name="${n}"`, def)}</label>` : `<label>${lbl}<input name="${n}" type="number" step="1" value="${def}"></label>`).join('');
   }
 }
 
 $('addForm').onsubmit = ev => {
   ev.preventDefault();
   const k = KINDS[$('kind').value], fd = new FormData(ev.target), f = {};
-  for (const [n, v] of fd) f[n] = (n === 'host' || n === 'name') ? v : (n === 'is_egress' ? !!v : +v);
+  for (const [n, v] of fd) f[n] = (n === 'host' || n === 'name' || n === 'phase') ? v : n === 'is_egress' ? !!v : n === 'riser_count' ? +v : parseLen(v, units);
+  const bad = Object.entries(f).find(([n, v]) => typeof v === 'number' && Number.isNaN(v));
+  if (bad) { badLen(fd.get(bad[0])); return; }
   if ($('kind').value === 'Door' && !f.host) { $('runErr').textContent = 'Add a wall first.'; return; }
   snapshot();
   project.elements.push({ id: uuid(), name: f.name, kind: k.build(f), discipline: k.disc, phase: +fd.get('phase'), start_offset_days: 0, lod: 'Lod200', cost_code: k.code, material: '' });
@@ -253,7 +337,7 @@ $('apply').onclick = () => { try { const p = JSON.parse($('jsonBox').value); con
 $('jsonBox').oninput = () => { try { $('jsonMsg').textContent = JSON.parse(bim.validate($('jsonBox').value)).join('\n'); } catch (e) { $('jsonMsg').textContent = String(e); } };
 $('save').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' })); a.download = `${project.name.replace(/\W+/g,'_')}.json`; a.click(); };
 $('open').onclick = () => $('file').click();
-$('file').onchange = async ev => { const f = ev.target.files[0]; if (!f) return; try { const p = JSON.parse(await f.text()); const v = JSON.parse(bim.validate(JSON.stringify(p))); if (v.length) throw new Error(v.join('\n')); project = p; rerun(false); } catch (e) { $('runErr').textContent = String(e); } ev.target.value = ''; };
+$('file').onchange = async ev => { const f = ev.target.files[0]; if (!f) return; try { const p = JSON.parse(await f.text()); const v = JSON.parse(bim.validate(JSON.stringify(p))); if (v.length) throw new Error(v.join('\n')); snapshot(); project = p; selectedId = null; rerun(false); } catch (e) { $('runErr').textContent = String(e); } ev.target.value = ''; };
 $('new').onclick = () => { const name = prompt('Project name', 'New project'); if (!name) return; snapshot(); project = JSON.parse(bim.new_project(name, 'IN-2026')); rerun(false); };
 document.querySelectorAll('.tabs .btn').forEach(b => b.onclick = () => selectTab(b.dataset.tab));
 
@@ -261,7 +345,11 @@ document.querySelectorAll('.tabs .btn').forEach(b => b.onclick = () => selectTab
 (async () => {
   try {
     await init();
-    project = JSON.parse(bim.sample_project());
+    const saved = restoreAutosave();
+    project = saved ? saved.project : JSON.parse(bim.sample_project());
+    if (saved) notice = ` · restored autosave from ${new Date(saved.saved_at).toLocaleString()}`;
+    $('units').value = units;
+    $('units').onchange = () => { units = $('units').value; store.set('buildsim.units', units); rerun(); };
     rerun(false);
   } catch (e) { $('runErr').textContent = 'Failed to start: ' + e + '\n(Build the wasm first — see web/README.md.)'; }
 })();
