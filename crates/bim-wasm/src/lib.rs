@@ -39,6 +39,11 @@ pub fn new_project(name: &str, rule_set: &str) -> Result<String, String> {
         duration_days: 10,
         depends_on: vec![],
     });
+    p.levels.push(bim_core::Level {
+        id: bim_core::LevelId(0),
+        name: "Level 1".into(),
+        elevation_m: 0.0,
+    });
     p.to_json().map_err(|e| e.to_string())
 }
 

@@ -15,6 +15,18 @@ impl Default for ElementId {
     }
 }
 
+/// Building storey (IfcBuildingStorey).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct LevelId(pub u32);
+
+/// A storey: name and finished-floor elevation (metres, Y up).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Level {
+    pub id: LevelId,
+    pub name: String,
+    pub elevation_m: f32,
+}
+
 /// Construction phase index; lower phases are built first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PhaseId(pub u32);
@@ -131,6 +143,9 @@ pub struct Element {
     /// Uniformat II-style cost code, e.g. "B2010".
     pub cost_code: String,
     pub material: String,
+    /// Storey the element belongs to (None: site / unassigned).
+    #[serde(default)]
+    pub level: Option<LevelId>,
 }
 
 impl Element {
@@ -150,6 +165,7 @@ impl Element {
             lod: Lod::Lod200,
             cost_code: String::new(),
             material: String::new(),
+            level: None,
         }
     }
 }
@@ -176,6 +192,8 @@ pub struct Space {
     /// is recomputed from it so the area cannot drift from the drawn extent.
     #[serde(default)]
     pub bounds: Option<[f32; 4]>,
+    #[serde(default)]
+    pub level: Option<LevelId>,
 }
 
 impl Space {
@@ -186,6 +204,7 @@ impl Space {
             floor_area_m2,
             egress_doors: vec![],
             bounds: None,
+            level: None,
         }
     }
     /// Area implied by `bounds` when present, otherwise the stated area.

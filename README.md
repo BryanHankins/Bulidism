@@ -3,7 +3,7 @@
 Prototype v0.7 (Phase 1 in progress). See COMPLETION_STATUS.docx for done vs open.
 
 ## Layout
-- crates/bim-core      IFC-aligned model, JSON I/O, validate(), Project::sample()
+- crates/bim-core      IFC-aligned model (incl. levels/storeys: name + finished-floor elevation; elements and spaces may sit on one), JSON I/O, validate(), Project::sample()
 - crates/bim-geom      oriented wall/beam boxes with door cut-outs, stepped stairs, ramp wedges, clash detection (AABB sweep + exact rotated-footprint overlap)
 - crates/bim-schedule  phase DAG (Kahn), CPM critical path, per-element 4D start days
 - crates/bim-rules     data-driven advisory rules (rules/IN-2026.json: 10 draft rules, citations only)
@@ -14,7 +14,7 @@ Prototype v0.7 (Phase 1 in progress). See COMPLETION_STATUS.docx for done vs ope
 - crates/bim-cli       headless pipeline: validate -> schedule -> advisories -> clashes -> takeoff; --html writes a self-contained three.js 4D report
 - assets/sample_office.json  exported sample project
 - assets/sample_report.html  generated 4D report (open in any browser; verified in headless Chromium)
-- web/                 live editor app: select/property panel, click-to-place walls, columns and doors (doors snap onto the wall you click), drag-to-move, undo/redo (Ctrl+Z/Y), Delete key, phase Gantt, CSV + standalone-HTML report export, JSON tab, autosave to browser storage (restored on reload), ft-in or metric display (model stays metric; web/units.js), printable code-check report (Print → save as PDF: findings, every rule checked with its verification status, spaces with occupant load, clashes, schedule/cost, sign-off block; web/print.js). unit-cost editor (Edit tab: every cost code with its usage, rate per SF/CY/LF or m²/m³/m, unpriced codes flagged, CSV import/export; web/costs.js). JS tests: `node --test web/units.test.mjs web/print.test.mjs web/costs.test.mjs` — index.html + app.js + viewer.js/css (shared with the static report) + vendored three.js; needs web/pkg from wasm-pack (see web/README.md)
+- web/                 live editor app: select/property panel, click-to-place walls, columns and doors (doors snap onto the wall you click), drag-to-move, undo/redo (Ctrl+Z/Y), Delete key, phase Gantt, CSV + standalone-HTML report export, JSON tab, autosave to browser storage (restored on reload), ft-in or metric display (model stays metric; web/units.js), printable code-check report (Print → save as PDF: findings, every rule checked with its verification status, spaces with occupant load, clashes, schedule/cost, sign-off block; web/print.js). levels (Edit tab: add/rename/set elevation/delete, active level for new elements; level picker per element and space; a Level filter in the viewer and exported report isolates one storey), unit-cost editor (Edit tab: every cost code with its usage, rate per SF/CY/LF or m²/m³/m, unpriced codes flagged, CSV import/export; web/costs.js). JS tests: `node --test web/units.test.mjs web/print.test.mjs web/costs.test.mjs` — index.html + app.js + viewer.js/css (shared with the static report) + vendored three.js; needs web/pkg from wasm-pack (see web/README.md)
 
 ## Verified (Rust 1.75, Ubuntu 24.04)
     cargo test --workspace            # all tests pass (bim-wasm exports are exercised natively)

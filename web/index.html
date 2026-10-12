@@ -36,6 +36,7 @@ textarea{width:100%;height:220px;font:12px/1.4 ui-monospace,Menlo,Consolas,monos
   <h2>Legend</h2><div class="legend" id="legend"></div>
   <label class="chk"><input type="checkbox" id="showClash"> Show clashes (<span id="nclash">0</span>)</label>
   <label class="chk"><input type="checkbox" id="showSpaces" checked> Show space outlines</label>
+  <label class="chk" id="levelRow" hidden>Level <select id="levelFilter"></select></label>
   <h2>Spaces</h2><div id="spaceList"></div>
   <h2>Schedule</h2><div id="phases"></div>
   <h2>Cost by phase</h2><div id="costs"></div>
@@ -47,6 +48,7 @@ textarea{width:100%;height:220px;font:12px/1.4 ui-monospace,Menlo,Consolas,monos
   <h2>Place <small style="font-weight:400;color:var(--muted)">· drag a selected element to move it</small></h2><div style="display:flex;gap:6px;margin-bottom:10px"><button class="btn" id="placeWall">Place wall (2 clicks)</button><button class="btn" id="placeCol">Place column</button><button class="btn" id="placeDoor">Place door</button><span id="placeMsg" style="font-size:12px;color:var(--muted)"></span></div>
   <h2>Add element</h2>
   <form class="add" id="addForm"><label class="full">Type<select id="kind"></select></label><div id="fields" class="full" style="display:contents"></div><button class="btn full" type="submit">Add</button></form>
+  <h2>Levels</h2><div id="levelEdit"></div>
   <h2>Phases</h2><div id="phaseEdit"></div>
   <h2>Unit costs</h2><div id="costEdit"></div><input type="file" id="ratesFile" accept=".csv,text/csv" hidden><datalist id="costCodes"></datalist>
   <h2>Spaces</h2><div id="spaceEdit"></div>

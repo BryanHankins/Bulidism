@@ -92,6 +92,25 @@ fn architecture_sample_imports_and_runs() {
     assert_eq!(n(|k| matches!(k, ElementKind::Wall { .. })), 4);
     assert_eq!(n(|k| matches!(k, ElementKind::Slab { .. })), 3);
     assert_eq!(p.spaces.len(), 2);
+    // one storey; every element and space is on it: walls/slabs by containment, spaces by
+    // aggregation, and the two roof slabs (whose IfcRoof sits in the site) by elevation
+    assert_eq!(p.levels.len(), 1);
+    assert_eq!(p.levels[0].name, "00 groundfloor");
+    assert!(
+        p.elements.iter().all(|e| e.level == Some(LevelId(0))),
+        "{:?}",
+        p.elements
+            .iter()
+            .map(|e| (&e.name, e.level))
+            .collect::<Vec<_>>()
+    );
+    assert!(p.spaces.iter().all(|s| s.level == Some(LevelId(0))));
+    assert!(
+        r.notes[1]
+            .ends_with("2 item(s) not contained in a storey were placed on one by elevation."),
+        "{:?}",
+        r.notes
+    );
     assert!(p.validate().is_empty(), "{:?}", p.validate());
     // the two roof slabs are sloped: imported at their measured 300 mm, not their 2.8-4.2 m box height
     for e in p.elements.iter().filter(|e| e.name.contains("roof")) {
