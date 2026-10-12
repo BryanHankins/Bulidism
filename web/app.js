@@ -1,6 +1,7 @@
 // Live editor: JS owns the project JSON; every edit re-runs the Rust pipeline in wasm.
 import init, * as bim from './pkg/bim_wasm.js';
 import { printHtml } from './print.js';
+import { setLevelElevation } from './levels.js';
 import { costRows, perLabel, rateOut, rateIn, parseDollars, ratesToCsv, parseRatesCsv } from './costs.js';
 import { snapStep, lenToInput, parseLen, fmtArea, areaToInput, parseArea, qtyOut, convertMessage } from './units.js';
 
@@ -311,14 +312,16 @@ function renderLevels() {
   const used = id => project.elements.filter(e => e.level === id).length + project.spaces.filter(s => s.level === id).length;
   $('levelEdit').innerHTML = (ls.length ? ls.map(l => `<div class="el" style="border:0;align-items:center">
       <label style="display:flex;gap:4px;align-items:center" title="Active level: new elements are placed here"><input type="radio" name="activeLevel" data-active="${l.id}" ${cur && l.id === cur.id ? 'checked' : ''}><input data-lv="${l.id}" data-f="name" value="${esc(l.name)}" style="width:110px"></label>
-      <span>${lenInput(`data-lv="${l.id}" data-f="elevation_m" style="width:84px" title="Finished-floor elevation"`, l.elevation_m)} <small style="color:var(--muted)" title="elements and spaces on this level">${used(l.id)}</small> <button class="btn" data-dellv="${l.id}" title="Delete level (its elements and spaces become unassigned)">✕</button></span></div>`).join('')
+      <span>${lenInput(`data-lv="${l.id}" data-f="elevation_m" style="width:84px" title="Finished-floor elevation; changing it moves everything on this level"`, l.elevation_m)} <small style="color:var(--muted)" title="elements and spaces on this level">${used(l.id)}</small> <button class="btn" data-dellv="${l.id}" title="Delete level (its elements and spaces become unassigned)">✕</button></span></div>`).join('')
     : '<small style="color:var(--muted)">No levels: everything is on one floor.</small>') + '<div><button class="btn" id="addLevel">+ level</button></div>';
   $('levelEdit').querySelectorAll('[data-active]').forEach(r => r.onchange = () => { activeLevel = +r.dataset.active; rerun(); });
   $('levelEdit').querySelectorAll('[data-f]').forEach(inp => inp.onchange = () => {
     const l = project.levels.find(x => x.id === +inp.dataset.lv);
     if (inp.dataset.f === 'name') { snapshot(); l.name = inp.value; rerun(); return; }
     const v = parseLen(inp.value, units); if (Number.isNaN(v)) { badLen(inp.value); renderLevels(); return; }
-    snapshot(); l.elevation_m = v; rerun();
+    snapshot(); const n = setLevelElevation(project, l.id, v);
+    if (n) notice = ` · moved ${n} element${n === 1 ? '' : 's'} with ${l.name}`;
+    rerun();
   });
   $('levelEdit').querySelectorAll('[data-dellv]').forEach(b => b.onclick = () => {
     const id = +b.dataset.dellv; snapshot();
