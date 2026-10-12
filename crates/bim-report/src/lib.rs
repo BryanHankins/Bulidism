@@ -41,6 +41,8 @@ pub struct ElementOut {
     pub qty: f32,
     pub unit: String,
     pub cost_code: String,
+    /// Storey id (None: site / unassigned).
+    pub level: Option<u32>,
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub indices: Vec<u32>,
@@ -56,11 +58,21 @@ pub struct ClashOut {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct LevelOut {
+    pub id: u32,
+    pub name: String,
+    pub elevation_m: f32,
+    pub elements: usize,
+    pub spaces: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SpaceOut {
     pub name: String,
     pub occupancy: String,
     pub area_m2: f32,
     pub exits: usize,
+    pub level: Option<u32>,
     /// Occupants per the rule set's area-per-occupant factor for this occupancy, if it has one.
     pub occupant_load: Option<u32>,
     pub bounds: Option<[f32; 4]>,
@@ -94,6 +106,8 @@ pub struct Report {
     /// Licensed reviewer of the rule set, if any (None = not yet reviewed).
     pub rules_reviewer: Option<String>,
     pub spaces: Vec<SpaceOut>,
+    /// Storeys, lowest first.
+    pub levels: Vec<LevelOut>,
 }
 
 pub const CLASH_TOLERANCE_M3: f32 = 0.001;
@@ -144,6 +158,7 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
             qty: line.map(|l| l.qty).unwrap_or(0.0),
             unit: line.map(|l| format!("{:?}", l.unit)).unwrap_or_default(),
             cost_code: e.cost_code.clone(),
+            level: e.level.map(|l| l.0),
             positions: m.positions.iter().flat_map(|v| [v.x, v.y, v.z]).collect(),
             normals: m.normals.iter().flat_map(|v| [v.x, v.y, v.z]).collect(),
             indices: m.indices,
@@ -221,6 +236,30 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
                 .collect()
         })
         .unwrap_or_default();
+    let mut levels: Vec<LevelOut> = project
+        .levels
+        .iter()
+        .map(|l| LevelOut {
+            id: l.id.0,
+            name: l.name.clone(),
+            elevation_m: l.elevation_m,
+            elements: project
+                .elements
+                .iter()
+                .filter(|e| e.level == Some(l.id))
+                .count(),
+            spaces: project
+                .spaces
+                .iter()
+                .filter(|s| s.level == Some(l.id))
+                .count(),
+        })
+        .collect();
+    levels.sort_by(|a, b| {
+        a.elevation_m
+            .total_cmp(&b.elevation_m)
+            .then(a.id.cmp(&b.id))
+    });
     let spaces = project
         .spaces
         .iter()
@@ -229,6 +268,7 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
             occupancy: format!("{:?}", s.occupancy),
             area_m2: s.area_m2(),
             exits: bim_rules::egress_exits(project, s),
+            level: s.level.map(|l| l.0),
             occupant_load: rules.and_then(|rs| {
                 rs.rules.iter().find_map(|r| match r.check {
                     bim_rules::Check::OccupantLoadExits {
@@ -246,6 +286,7 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
         .collect();
     Ok(Report {
         spaces,
+        levels,
         rules_checked,
         rules_reviewer: rules.and_then(|rs| rs.reviewer.clone()),
         project: project.name.clone(),
@@ -364,6 +405,25 @@ mod tests {
             build(&Project::sample(), None).unwrap().spaces[0].occupant_load,
             None
         );
+    }
+    #[test]
+    fn levels_in_report() {
+        let mut p = Project::sample();
+        p.levels.push(Level {
+            id: LevelId(1),
+            name: "Level 2".into(),
+            elevation_m: 3.6,
+        });
+        p.levels.swap(0, 1); // report sorts by elevation
+        let r = build(&p, None).unwrap();
+        let names: Vec<(&str, usize, usize)> = r
+            .levels
+            .iter()
+            .map(|l| (l.name.as_str(), l.elements, l.spaces))
+            .collect();
+        assert_eq!(names, vec![("Level 1", 11, 1), ("Level 2", 0, 0)]);
+        assert_eq!(r.spaces[0].level, Some(0));
+        assert_eq!(r.elements.iter().filter(|e| e.level.is_none()).count(), 1); // the site ramp
     }
     #[test]
     fn invalid_project_is_error() {

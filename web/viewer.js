@@ -33,12 +33,22 @@ for(const e of D.elements){
   m.userData=e; m.visible=false; S.add(m); meshes.push(m); g.computeBoundingBox(); bb.union(g.boundingBox);
 }
 const dark=matchMedia('(prefers-color-scheme: dark)').matches&&document.documentElement.dataset.theme!=='light';
-const grid=new THREE.GridHelper(40,40,dark?0x4a463f:0xbbb5aa,dark?0x2e2b27:0xdcd7cd); grid.position.y=-0.01; S.add(grid);
+const grid=new THREE.GridHelper(40,40,dark?0x4a463f:0xbbb5aa,dark?0x2e2b27:0xdcd7cd); grid.position.y=(opts.groundY||0)-0.01; S.add(grid);
 const clashGroup=new THREE.Group(); clashGroup.visible=false; S.add(clashGroup);
 const spaceGroup=new THREE.Group(); S.add(spaceGroup);
-for(const sp of (D.spaces||[])){ if(!sp.bounds) continue; const [x,z,sx,sz]=sp.bounds;
-  const g=new THREE.BufferGeometry().setFromPoints([[x,0.02,z],[x+sx,0.02,z],[x+sx,0.02,z+sz],[x,0.02,z+sz],[x,0.02,z]].map(p=>new THREE.Vector3(...p)));
-  spaceGroup.add(new THREE.Line(g,new THREE.LineBasicMaterial({color:0x3f7a3a})));}
+const levels=D.levels||[], elevOf=id=>{const l=levels.find(l=>l.id===id);return l?l.elevation_m:0;};
+for(const sp of (D.spaces||[])){ if(!sp.bounds) continue; const [x,z,sx,sz]=sp.bounds, y=elevOf(sp.level)+0.02;
+  const g=new THREE.BufferGeometry().setFromPoints([[x,y,z],[x+sx,y,z],[x+sx,y,z+sz],[x,y,z+sz],[x,y,z]].map(p=>new THREE.Vector3(...p)));
+  const ln=new THREE.Line(g,new THREE.LineBasicMaterial({color:0x3f7a3a})); ln.userData.level=sp.level; spaceGroup.add(ln);}
+// level filter: isolate one storey (elements with no level are site work, shown under "All")
+let levelSel=opts.level??'all';
+const levelRow=$('levelRow'), levelFilter=$('levelFilter');
+if(levelFilter){ levelRow.hidden=levels.length<2;
+  levelFilter.innerHTML='<option value="all">All levels</option>'+levels.map(l=>`<option value="${l.id}">${esc(l.name)}</option>`).join('');
+  if(![...levelFilter.options].some(o=>o.value===String(levelSel)))levelSel='all';
+  levelFilter.value=String(levelSel);
+  levelFilter.onchange=e=>{levelSel=e.target.value;setDay(day);if(opts.onLevel)opts.onLevel(levelSel);}; }
+const onLevel=lv=>levelSel==='all'||String(lv)===levelSel;
 const handleGroup=new THREE.Group(); S.add(handleGroup);
 function showHandles(pts){ handleGroup.clear();
   (pts||[]).forEach((p,i)=>{ const h=new THREE.Mesh(new THREE.SphereGeometry(0.18,12,12),new THREE.MeshBasicMaterial({color:i===0?0x2e6fd8:0xb5541c}));
@@ -52,7 +62,8 @@ $('showClash').onchange=e=>clashGroup.visible=e.target.checked;
 // orbit camera (no external controls)
 const ctr=bb.getCenter(new THREE.Vector3()); let radius=bb.getSize(new THREE.Vector3()).length()*1.25||20, theta=-0.7, phi=1.1;
 function place(){cam.position.set(ctr.x+radius*Math.sin(phi)*Math.cos(theta),ctr.y+radius*Math.cos(phi),ctr.z+radius*Math.sin(phi)*Math.sin(theta));cam.lookAt(ctr);}
-const ray=new THREE.Raycaster(), ndc=new THREE.Vector2(), ground=new THREE.Plane(new THREE.Vector3(0,1,0),0);
+// clicks land on the editor's active level (plane y = groundY)
+const ray=new THREE.Raycaster(), ndc=new THREE.Vector2(), ground=new THREE.Plane(new THREE.Vector3(0,1,0),-(opts.groundY||0));
 function toNdc(cx,cy){const r=canvas.getBoundingClientRect();ndc.set(((cx-r.left)/r.width)*2-1,-((cy-r.top)/r.height)*2+1);ray.setFromCamera(ndc,cam);}
 function pickHit(cx,cy){toNdc(cx,cy);return ray.intersectObjects(meshes.filter(m=>m.visible),false)[0]||null;}
 function pick(cx,cy){const h=pickHit(cx,cy);return h?h.object.userData.id:null;}
@@ -88,7 +99,8 @@ const ro=new ResizeObserver(resize); ro.observe(canvas.parentElement); resize();
 
 let day=0, playing=false, last=0;
 function setDay(d){day=Math.max(0,Math.min(D.total_days,d));$('slider').value=day;$('day').textContent=day;
-  for(const m of meshes)m.visible=day>=m.userData.start_day;
+  for(const m of meshes)m.visible=day>=m.userData.start_day&&onLevel(m.userData.level);
+  for(const l of spaceGroup.children)l.visible=onLevel(l.userData.level);
   let cost=0; for(const e of D.elements)if(day>=e.start_day)cost+=e.cost_usd;
   $('cost').textContent=cost.toLocaleString(undefined,{minimumFractionDigits:2});
   const n=$('ganttNow'); if(n)n.style.left=(100*day/Math.max(1,D.total_days))+'%';
@@ -99,6 +111,6 @@ let alive=true;
 function frame(t){if(!alive)return;loop(t);}
 function loop(t){if(playing&&t-last>120){last=t;setDay(day+1);if(day>=D.total_days){playing=false;$('play').textContent='Play'}}R.render(S,cam);requestAnimationFrame(frame)}
 setDay(opts.day||0); requestAnimationFrame(frame);
-window.__viewer={dispose(){alive=false;ac.abort();ro.disconnect();R.dispose();for(const m of meshes){m.geometry.dispose();m.material.dispose();}},get day(){return day},highlight,pick,groundPoint,setMarker(p){if(p){marker.position.set(p[0],0.15,p[1]);marker.visible=true;}else marker.visible=false;},get selected(){return selected},pickHit,showHandles,setSpacesVisible(v){spaceGroup.visible=v}};
+window.__viewer={dispose(){alive=false;ac.abort();ro.disconnect();R.dispose();for(const m of meshes){m.geometry.dispose();m.material.dispose();}},get day(){return day},highlight,pick,groundPoint,setMarker(p){if(p){marker.position.set(p[0],0.15,p[1]);marker.visible=true;}else marker.visible=false;},get selected(){return selected},pickHit,showHandles,setSpacesVisible(v){spaceGroup.visible=v},visibleIds(){return meshes.filter(m=>m.visible).map(m=>m.userData.id)}};
 if(opts.selected)highlight(opts.selected);
 };

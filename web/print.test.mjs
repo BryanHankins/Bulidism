@@ -37,6 +37,12 @@ test('errors first, units, totals, verification, sign-off', () => {
   assert.ok(printHtml(report(), 'metric').includes('96.0 m²'));
 });
 
+test('spaces show their level when the project has levels', () => {
+  const h = printHtml(report({ levels: [{ id: 0, name: 'Level <1>', elevation_m: 0 }], spaces: [{ name: 'Office', occupancy: 'Business', area_m2: 96, exits: 2, occupant_load: 7, level: 0 }] }), 'metric');
+  assert.ok(h.includes('<th>Level</th>') && h.includes('<td>Level &#60;1&#62;</td>'));
+  assert.ok(!printHtml(report(), 'metric').includes('<th>Level</th>'));
+});
+
 test('page footer is a safe CSS string', () => {
   const h = printHtml(report({ project: 'A "quoted" \\ name</style><script>' }), 'metric');
   const css = h.slice(h.indexOf('<style>'), h.indexOf('</style>'));

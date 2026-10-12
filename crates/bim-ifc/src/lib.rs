@@ -607,6 +607,7 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
     // ---- relationships
     let mut void_host: HashMap<u64, u64> = HashMap::new(); // opening -> host element
     let mut fill_opening: HashMap<u64, u64> = HashMap::new(); // door -> opening
+    let mut contained_in: HashMap<u64, u64> = HashMap::new(); // element -> spatial structure
     let mut children: HashMap<u64, Vec<u64>> = HashMap::new();
     let mut props: HashMap<u64, Vec<(String, Value)>> = HashMap::new();
     let mut quants: HashMap<u64, Vec<(String, f64)>> = HashMap::new();
@@ -622,6 +623,13 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
             "IFCRELFILLSELEMENT" => {
                 if let (Some(o), Some(d)) = (e.arg(4).id(), e.arg(5).id()) {
                     fill_opening.insert(d, o);
+                }
+            }
+            "IFCRELCONTAINEDINSPATIALSTRUCTURE" => {
+                if let Some(s) = e.arg(5).id() {
+                    for el in e.arg(4).list().iter().filter_map(Value::id) {
+                        contained_in.insert(el, s);
+                    }
                 }
             }
             "IFCRELAGGREGATES" | "IFCRELNESTS" => {
@@ -789,6 +797,58 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
             depends_on: vec![ENVELOPE],
         },
     ];
+    // storeys -> levels (lowest first), at their world elevation in the model frame
+    let mut storeys: Vec<(f32, u64)> = ids
+        .iter()
+        .filter(|i| f.entities[i].ty == "IFCBUILDINGSTOREY")
+        .map(|&i| {
+            let s = &f.entities[&i];
+            let z = if r.ent(s.arg(5)).is_some() {
+                r.object_placement(s.arg(5), 0).translation.z
+            } else {
+                s.arg(9).num().unwrap_or(0.0)
+            };
+            ((z * len_scale) as f32 + shift.y, i)
+        })
+        .collect();
+    storeys.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    let mut level_of_storey: HashMap<u64, LevelId> = HashMap::new();
+    for (n, (elev, sid)) in storeys.iter().enumerate() {
+        let s = &f.entities[sid];
+        let name = [s.arg(2), s.arg(7)]
+            .iter()
+            .find_map(|v| v.str().filter(|t| !t.is_empty()))
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("Storey {}", n + 1));
+        level_of_storey.insert(*sid, LevelId(n as u32));
+        p.levels.push(Level {
+            id: LevelId(n as u32),
+            name,
+            elevation_m: *elev,
+        });
+    }
+    let parent_of: HashMap<u64, u64> = children
+        .iter()
+        .flat_map(|(par, ks)| ks.iter().map(move |k| (*k, *par)))
+        .collect();
+    // contained in a storey directly, or via a space / parent assembly (stair, roof, curtain wall)
+    // not on any storey (e.g. a roof contained in the site): the storey at or below its base
+    let level_elev: Vec<(f32, LevelId)> = p.levels.iter().map(|l| (l.elevation_m, l.id)).collect();
+    let by_elevation = |y: f32| -> Option<LevelId> {
+        let below = level_elev.iter().rev().find(|(e, _)| *e <= y + 0.01);
+        below.or(level_elev.first()).map(|(_, id)| *id)
+    };
+    let mut by_elev_count = 0;
+    let level_for = |id: u64| -> Option<LevelId> {
+        let mut cur = id;
+        for _ in 0..16 {
+            if let Some(l) = level_of_storey.get(&cur) {
+                return Some(*l);
+            }
+            cur = *contained_in.get(&cur).or_else(|| parent_of.get(&cur))?;
+        }
+        None
+    };
     let mut used_ids: HashSet<ElementId> = HashSet::new();
     let mut walls: HashMap<u64, (ElementId, Vec3, Vec3, f32, f32)> = HashMap::new(); // start, end, height, thickness
     let mut doors: HashMap<u64, (ElementId, bool)> = HashMap::new();
@@ -972,6 +1032,11 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
                     }
                     sp.floor_area_m2 = q as f32;
                 }
+                sp.level = level_for(*id).or_else(|| {
+                    let l = by_elevation(b.min.y);
+                    by_elev_count += l.is_some() as usize;
+                    l
+                });
                 p.spaces.push(sp);
                 space_src.push(*id);
                 *count.entry("spaces").or_default() += 1;
@@ -981,6 +1046,11 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
         let mut el = Element::new(label, k, disc, phase);
         el.cost_code = code.into();
         el.id = unique_id(e, &mut used_ids);
+        el.level = level_for(*id).or_else(|| {
+            let l = by_elevation(b.min.y);
+            by_elev_count += l.is_some() as usize;
+            l
+        });
         if let ElementKind::Wall {
             start,
             end,
@@ -1080,6 +1150,12 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
         );
         el.cost_code = "C1020".into();
         el.id = unique_id(e, &mut used_ids);
+        el.level = level_for(*id).or_else(|| {
+            p.elements
+                .iter()
+                .find(|w| w.id == wall_id)
+                .and_then(|w| w.level)
+        });
         doors.insert(*id, (el.id, egress));
         *count.entry("doors").or_default() += 1;
         p.add(el);
@@ -1126,6 +1202,25 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
             }
         ),
     );
+    if !p.levels.is_empty() {
+        notes.insert(
+            1,
+            format!(
+                "{} storey(s): {}{}.",
+                p.levels.len(),
+                p.levels
+                    .iter()
+                    .map(|l| format!("{} at {:.2} m", l.name, l.elevation_m))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                if by_elev_count > 0 {
+                    format!("; {by_elev_count} item(s) not contained in a storey were placed on one by elevation")
+                } else {
+                    String::new()
+                }
+            ),
+        );
+    }
     if !skipped.is_empty() {
         notes.push(format!(
             "Not imported (no matching element type yet): {}.",

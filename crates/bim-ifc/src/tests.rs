@@ -57,15 +57,29 @@ fn fixture_imports_every_supported_kind() {
     let p = &r.project;
     assert_eq!(p.name, "Fixture Clinic");
     assert!(p.validate().is_empty(), "{:?}", p.validate());
+    assert_eq!(
+        r.notes[0],
+        "Imported 1 beams, 1 columns, 1 doors, 1 slabs, 1 spaces, 1 stairs, 4 walls from IFC4 (millimetres)."
+    );
+    // two storeys, lowest first, at their world elevations (3 m and 6 m)
+    let lv: Vec<(&str, f32)> = p
+        .levels
+        .iter()
+        .map(|l| (l.name.as_str(), l.elevation_m))
+        .collect();
+    assert_eq!(lv, vec![("Level 1", 3.0), ("Level 2", 6.0)]);
     assert!(
-        r.notes[0].starts_with(
-            "Imported 1 slabs, 1 columns, 1 beams, 3 walls, 1 doors, 1 stairs, 1 spaces"
-        ) || r.notes[0].contains("3 walls"),
+        r.notes[1].starts_with("2 storey(s): Level 1 at 3.00 m, Level 2 at 6.00 m"),
         "{:?}",
         r.notes
     );
-    // model axes: x = IFC x, y = IFC z (up), z = -IFC y; re-centred so the plan starts at 0
-    // (IFC y max 4000 mm -> model z 0). Storey at +3000 mm.
+    assert_eq!(by_name(p, "Wall D upper").level, Some(LevelId(1)));
+    for e in p.elements.iter().filter(|e| e.name != "Wall D upper") {
+        assert_eq!(e.level, Some(LevelId(0)), "{}", e.name);
+    }
+    assert_eq!(p.spaces[0].level, Some(LevelId(0))); // aggregated under the storey
+                                                     // model axes: x = IFC x, y = IFC z (up), z = -IFC y; re-centred so the plan starts at 0
+                                                     // (IFC y max 4000 mm -> model z 0). Storey at +3000 mm.
     let ElementKind::Wall {
         start,
         end,

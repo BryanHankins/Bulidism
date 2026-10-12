@@ -7,7 +7,7 @@ import { snapStep, lenToInput, parseLen, fmtArea, areaToInput, parseArea, qtyOut
 const $ = id => document.getElementById(id);
 // user-supplied strings (names, cost codes) go into innerHTML: always escape
 const esc = v => String(v).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
-let project = null, rules = null, rulesId = null, lastDay = 0, selectedId = null, placing = null, placeStart = null, lastReport = null;
+let project = null, rules = null, rulesId = null, lastDay = 0, lastLevel = 'all', activeLevel = null, selectedId = null, placing = null, placeStart = null, lastReport = null;
 const undoStack = [], redoStack = [];
 const store = { get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); return true; } catch (_) { return false; } } };
 // display units only; the engine stays metric
@@ -43,9 +43,9 @@ const snap = v => Math.round(v / step()) * step();
 
 const KINDS = {
   Wall:   { fields: { sx:['start x',0], sz:['start z',0], ex:['end x',6], ez:['end z',0], height:['height',3], thickness:['thickness',0.25] },
-            build: f => ({ Wall: { start:[f.sx,0.2,f.sz], end:[f.ex,0.2,f.ez], height:f.height, thickness:f.thickness } }), disc:'Architectural', code:'B2010' },
+            build: f => ({ Wall: { start:[f.sx,lvlY(),f.sz], end:[f.ex,lvlY(),f.ez], height:f.height, thickness:f.thickness } }), disc:'Architectural', code:'B2010' },
   Column: { fields: { x:['x',0], z:['z',0], width:['width',0.4], depth:['depth',0.4], height:['height',3.2] },
-            build: f => ({ Column: { base:[f.x,0.2,f.z], width:f.width, depth:f.depth, height:f.height } }), disc:'Structural', code:'B1010' },
+            build: f => ({ Column: { base:[f.x,lvlY(),f.z], width:f.width, depth:f.depth, height:f.height } }), disc:'Structural', code:'B1010' },
   Slab:   { fields: { x:['origin x',0], z:['origin z',0], y:['elevation',0], size_x:['size x',12], size_z:['size z',8], thickness:['thickness',0.2] },
             build: f => ({ Slab: { origin:[f.x,f.y,f.z], size_x:f.size_x, size_z:f.size_z, thickness:f.thickness } }), disc:'Structural', code:'A1010' },
   Beam:   { fields: { sx:['start x',0], sy:['start y',3.4], sz:['start z',0], ex:['end x',12], ez:['end z',0], width:['width',0.3], depth:['depth',0.5] },
@@ -53,10 +53,16 @@ const KINDS = {
   Door:   { fields: { host:['host wall','wall'], offset:['offset',1], width:['width',0.9], height:['height',2.1], is_egress:['egress','bool'] },
             build: f => ({ Door: { host:f.host, offset:f.offset, width:f.width, height:f.height, is_egress:!!f.is_egress } }), disc:'Architectural', code:'C1020' },
   Stair:  { fields: { x:['x',1], z:['z',3], run_length:['run',3.5], total_rise:['rise',3], width:['width',1.2], riser_count:['risers',17] },
-            build: f => ({ Stair: { base:[f.x,0.2,f.z], run_length:f.run_length, total_rise:f.total_rise, width:f.width, riser_count:Math.round(f.riser_count) } }), disc:'Architectural', code:'C2010' },
+            build: f => ({ Stair: { base:[f.x,lvlY(),f.z], run_length:f.run_length, total_rise:f.total_rise, width:f.width, riser_count:Math.round(f.riser_count) } }), disc:'Architectural', code:'C2010' },
   Ramp:   { fields: { x:['x',6], z:['z',-3], run_length:['run',2.4], rise:['rise',0.2], width:['width',1.2] },
-            build: f => ({ Ramp: { base:[f.x,0,f.z], run_length:f.run_length, rise:f.rise, width:f.width } }), disc:'Site', code:'G2030' },
+            build: f => ({ Ramp: { base:[f.x,lvlY(),f.z], run_length:f.run_length, rise:f.rise, width:f.width } }), disc:'Site', code:'G2030' },
 };
+
+// ---- levels: new elements go on the active level, at its elevation ----
+const sortedLevels = () => [...(project.levels || [])].sort((a, b) => a.elevation_m - b.elevation_m || a.id - b.id);
+function currentLevel() { const ls = sortedLevels(); return ls.find(l => l.id === activeLevel) || ls[0] || null; }
+const lvlY = () => { const l = currentLevel(); return l ? l.elevation_m : 0; };
+const levelOptions = sel => '<option value="">(none / site)</option>' + sortedLevels().map(l => `<option value="${l.id}" ${l.id === sel ? 'selected' : ''}>${esc(l.name)}</option>`).join('');
 
 function uuid(){ return crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return (c==='x'?r:(r&3|8)).toString(16)}); }
 function status(t){ $('status').textContent = t; }
@@ -78,13 +84,13 @@ function rerun(keepDay = true) {
     $('spaceList').innerHTML = report.spaces.length
       ? report.spaces.map(s => `<div class="row"><span>${esc(s.name)} <small style="color:var(--muted)">${s.occupancy}</small></span><span>${fmtArea(s.area_m2, units)} · ${s.exits} exit${s.exits===1?'':'s'}</span></div>`).join('')
       : '<div class="row"><span>No spaces defined</span></div>';
-    renderReport(report, { day: keepDay ? Math.min(lastDay, report.total_days) : 0, selected: selectedId, onClick: onViewClick, onMove: onViewMove, onHandle: onViewHandle, handlesFor, onDay: d => lastDay = d });
+    renderReport(report, { day: keepDay ? Math.min(lastDay, report.total_days) : 0, selected: selectedId, onClick: onViewClick, onMove: onViewMove, onHandle: onViewHandle, handlesFor, onDay: d => lastDay = d, level: lastLevel, onLevel: l => lastLevel = l, groundY: lvlY() });
     status(`ran in ${(performance.now()-t0).toFixed(1)} ms · schema v${bim.schema_version()}${rules ? '' : ` · no rule file for '${project.rule_set}', advisories skipped`}${notice}`);
     notice = '';
   } catch (e) {
     $('runErr').textContent = String(e);
   }
-  renderEditor(); renderProps(); renderSpaces(); renderCosts(); $('jsonBox').value = JSON.stringify(project, null, 2);
+  renderEditor(); renderProps(); renderSpaces(); renderCosts(); renderLevels(); $('jsonBox').value = JSON.stringify(project, null, 2);
   autosave();
 }
 
@@ -97,7 +103,7 @@ function renderProps() {
   const e = selectedEl(); $('selPanel').hidden = !e; if (!e) return;
   const kind = Object.keys(e.kind)[0], k = e.kind[kind];
   const phases = project.phases.map(p => `<option value="${p.id}" ${p.id===e.phase?'selected':''}>${esc(p.name)}</option>`).join('');
-  let h = `<label class="full">Name<input name="name" value="${esc(e.name)}"></label><label>Phase<select name="phase">${phases}</select></label><label>Offset days<input name="start_offset_days" type="number" min="0" value="${e.start_offset_days||0}"></label><label>Cost code<input name="cost_code" list="costCodes" value="${esc(e.cost_code)}"></label><label>Discipline<select name="discipline">${['Architectural','Structural','Mechanical','Electrical','Plumbing','Site'].map(d=>`<option ${d===e.discipline?'selected':''}>${d}</option>`).join('')}</select></label>`;
+  let h = `<label class="full">Name<input name="name" value="${esc(e.name)}"></label><label>Phase<select name="phase">${phases}</select></label><label>Offset days<input name="start_offset_days" type="number" min="0" value="${e.start_offset_days||0}"></label><label>Cost code<input name="cost_code" list="costCodes" value="${esc(e.cost_code)}"></label><label>Discipline<select name="discipline">${['Architectural','Structural','Mechanical','Electrical','Plumbing','Site'].map(d=>`<option ${d===e.discipline?'selected':''}>${d}</option>`).join('')}</select></label><label>Level<select name="level">${levelOptions(e.level)}</select></label>`;
   for (const v of VEC[kind]) h += ['x','y','z'].map((ax,i) => `<label>${v} ${ax}${lenInput(`name="${v}.${i}"`, k[v][i])}</label>`).join('');
   for (const n of NUMERIC[kind]) h += isLen(n) ? `<label>${n}${lenInput(`name="${n}"`, k[n])}</label>` : `<label>${n}<input name="${n}" type="number" step="1" value="${k[n]}"></label>`;
   if (kind === 'Door') h += `<label>egress<select name="is_egress"><option value="1" ${k.is_egress?'selected':''}>yes</option><option value="" ${!k.is_egress?'selected':''}>no</option></select></label>`;
@@ -109,6 +115,7 @@ function renderProps() {
     snapshot();
     if (n === 'name' || n === 'cost_code' || n === 'discipline') e[n] = val;
     else if (n === 'phase' || n === 'start_offset_days') e[n] = +val;
+    else if (n === 'level') e.level = val === '' ? null : +val;
     else if (n === 'is_egress') k.is_egress = !!val;
     else if (n.includes('.')) { const [v,i] = n.split('.'); k[v][+i] = len; }
     else k[n] = n === 'riser_count' ? Math.max(1, Math.round(+val)) : len;
@@ -152,6 +159,7 @@ function renderSpaces() {
     return `<div style="border:1px solid var(--line);border-radius:6px;padding:8px;margin-bottom:8px">
       <div style="display:flex;gap:6px"><input data-sp="${i}" data-f="name" value="${esc(s.name)}" style="flex:1"><button data-del="${i}" class="btn">✕</button></div>
       <label class="chk">Occupancy<select data-sp="${i}" data-f="occupancy">${opts}</select></label>
+      <label class="chk">Level<select data-sp="${i}" data-f="level">${levelOptions(s.level)}</select></label>
       <label class="chk" style="font-size:12px"><input type="checkbox" data-sp="${i}" data-f="useBounds" ${b ? 'checked' : ''}> area from plan rectangle</label>
       ${b ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">${['x','z','size x','size z'].map((l, j) => `<label style="font-size:11px;color:var(--muted)">${l}${lenInput(`data-sp="${i}" data-b="${j}" style="width:100%"`, b[j])}</label>`).join('')}</div>`
           : `<label class="chk" style="font-size:12px">Area ${units === 'imperial' ? 'sf' : 'm²'}<input type="number" step="1" data-sp="${i}" data-f="floor_area_m2" value="${areaToInput(s.floor_area_m2, units)}" style="width:80px"></label>`}
@@ -164,6 +172,7 @@ function renderSpaces() {
     if (inp.dataset.b !== undefined) { sp.bounds[+inp.dataset.b] = v; sp.floor_area_m2 = sp.bounds[2] * sp.bounds[3]; }
     else if (inp.dataset.f === 'useBounds') { sp.bounds = inp.checked ? [0, 0, Math.sqrt(sp.floor_area_m2) || 4, Math.sqrt(sp.floor_area_m2) || 4] : null; if (sp.bounds) sp.floor_area_m2 = sp.bounds[2] * sp.bounds[3]; }
     else if (inp.dataset.f === 'floor_area_m2') sp.floor_area_m2 = v;
+    else if (inp.dataset.f === 'level') sp.level = inp.value === '' ? null : +inp.value;
     else sp[inp.dataset.f] = inp.value;
     rerun();
   });
@@ -272,7 +281,7 @@ document.addEventListener('keydown', ev => {
     if (ev.key === 'y' || (ev.key === 'z' && ev.shiftKey)) { ev.preventDefault(); redo(); }
   }
 });
-function newEl(name, kind, disc, code){ const ph = project.phases[project.phases.length-1]; return { id: uuid(), name, kind, discipline: disc, phase: ph ? ph.id : 0, start_offset_days: 0, lod: 'Lod200', cost_code: code, material: '' }; }
+function newEl(name, kind, disc, code){ const ph = project.phases[project.phases.length-1]; return { id: uuid(), name, kind, discipline: disc, phase: ph ? ph.id : 0, start_offset_days: 0, lod: 'Lod200', cost_code: code, material: '', level: currentLevel()?.id ?? null }; }
 function onViewClick({ id, point, ground }) {
   if (placing === 'door') {
     const w = id && project.elements.find(e => e.id === id && e.kind.Wall);
@@ -286,16 +295,45 @@ function onViewClick({ id, point, ground }) {
   }
   if (placing && ground) {
     const [x, z] = [snap(ground[0]), snap(ground[1])];
-    if (placing === 'column') { snapshot(); const e = newEl(`Column ${project.elements.length+1}`, { Column: { base:[x,0.2,z], width:0.4, depth:0.4, height:3.2 } }, 'Structural', 'B1010'); project.elements.push(e); selectedId = e.id; rerun(); return; }
+    if (placing === 'column') { snapshot(); const e = newEl(`Column ${project.elements.length+1}`, { Column: { base:[x,lvlY(),z], width:0.4, depth:0.4, height:3.2 } }, 'Structural', 'B1010'); project.elements.push(e); selectedId = e.id; rerun(); return; }
     if (!placeStart) { placeStart = [x, z]; window.__viewer.setMarker(placeStart); $('placeMsg').textContent = 'click end point (Esc cancels)'; return; }
     if (Math.hypot(x - placeStart[0], z - placeStart[1]) < step()) return;
     snapshot();
-    const e = newEl(`Wall ${project.elements.length+1}`, { Wall: { start:[placeStart[0],0.2,placeStart[1]], end:[x,0.2,z], height:3.0, thickness:0.25 } }, 'Architectural', 'B2010');
+    const e = newEl(`Wall ${project.elements.length+1}`, { Wall: { start:[placeStart[0],lvlY(),placeStart[1]], end:[x,lvlY(),z], height:3.0, thickness:0.25 } }, 'Architectural', 'B2010');
     project.elements.push(e); selectedId = e.id; setPlacing(null); rerun(); return;
   }
   selectedId = id; window.__viewer.highlight(id); renderProps(); if (id) selectTab('edit');
 }
 
+
+function renderLevels() {
+  const ls = sortedLevels(), cur = currentLevel();
+  const used = id => project.elements.filter(e => e.level === id).length + project.spaces.filter(s => s.level === id).length;
+  $('levelEdit').innerHTML = (ls.length ? ls.map(l => `<div class="el" style="border:0;align-items:center">
+      <label style="display:flex;gap:4px;align-items:center" title="Active level: new elements are placed here"><input type="radio" name="activeLevel" data-active="${l.id}" ${cur && l.id === cur.id ? 'checked' : ''}><input data-lv="${l.id}" data-f="name" value="${esc(l.name)}" style="width:110px"></label>
+      <span>${lenInput(`data-lv="${l.id}" data-f="elevation_m" style="width:84px" title="Finished-floor elevation"`, l.elevation_m)} <small style="color:var(--muted)" title="elements and spaces on this level">${used(l.id)}</small> <button class="btn" data-dellv="${l.id}" title="Delete level (its elements and spaces become unassigned)">✕</button></span></div>`).join('')
+    : '<small style="color:var(--muted)">No levels: everything is on one floor.</small>') + '<div><button class="btn" id="addLevel">+ level</button></div>';
+  $('levelEdit').querySelectorAll('[data-active]').forEach(r => r.onchange = () => { activeLevel = +r.dataset.active; rerun(); });
+  $('levelEdit').querySelectorAll('[data-f]').forEach(inp => inp.onchange = () => {
+    const l = project.levels.find(x => x.id === +inp.dataset.lv);
+    if (inp.dataset.f === 'name') { snapshot(); l.name = inp.value; rerun(); return; }
+    const v = parseLen(inp.value, units); if (Number.isNaN(v)) { badLen(inp.value); renderLevels(); return; }
+    snapshot(); l.elevation_m = v; rerun();
+  });
+  $('levelEdit').querySelectorAll('[data-dellv]').forEach(b => b.onclick = () => {
+    const id = +b.dataset.dellv; snapshot();
+    project.levels = project.levels.filter(l => l.id !== id);
+    for (const x of [...project.elements, ...project.spaces]) if (x.level === id) x.level = null;
+    if (activeLevel === id) activeLevel = null;
+    rerun();
+  });
+  $('addLevel').onclick = () => {
+    snapshot(); project.levels = project.levels || [];
+    const top = ls[ls.length - 1], id = project.levels.reduce((m, l) => Math.max(m, l.id), -1) + 1;
+    project.levels.push({ id, name: `Level ${project.levels.length + 1}`, elevation_m: top ? top.elevation_m + 3.6576 : 0 }); // 12 ft floor-to-floor
+    activeLevel = id; rerun();
+  };
+}
 
 function renderEditor() {
   const walls = project.elements.filter(e => e.kind.Wall);
@@ -330,7 +368,7 @@ $('addForm').onsubmit = ev => {
   if (bad) { badLen(fd.get(bad[0])); return; }
   if ($('kind').value === 'Door' && !f.host) { $('runErr').textContent = 'Add a wall first.'; return; }
   snapshot();
-  project.elements.push({ id: uuid(), name: f.name, kind: k.build(f), discipline: k.disc, phase: +fd.get('phase'), start_offset_days: 0, lod: 'Lod200', cost_code: k.code, material: '' });
+  project.elements.push({ id: uuid(), name: f.name, kind: k.build(f), discipline: k.disc, phase: +fd.get('phase'), start_offset_days: 0, lod: 'Lod200', cost_code: k.code, material: '', level: currentLevel()?.id ?? null });
   rerun();
 };
 $('apply').onclick = () => { try { const p = JSON.parse($('jsonBox').value); const v = JSON.parse(bim.validate(JSON.stringify(p))); $('jsonMsg').textContent = v.join('\n'); if (!v.length) { snapshot(); project = p; rerun(); } } catch (e) { $('jsonMsg').textContent = String(e); } };

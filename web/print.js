@@ -16,6 +16,7 @@ const LABEL = { error: 'Error', warning: 'Warning', info: 'Info' };
  */
 export function printHtml(r, units, now = new Date()) {
   const name = id => (r.elements.find(e => e.id === id) || {}).name || '?';
+  const levels = r.levels || [], levelName = id => (levels.find(l => l.id === id) || {}).name || '—';
   const findings = [...r.advisories].sort((a, b) => RANK[a.severity] - RANK[b.severity]);
   const count = s => r.advisories.filter(a => a.severity === s).length;
   const total = r.total_cost_usd ?? r.phases.reduce((a, p) => a + p.cost_usd, 0);
@@ -74,8 +75,8 @@ ${table(['Rule', 'Citation', 'Result', 'Parameter verification'],
   'No rule file was loaded, so no code checks ran.')}
 
 <h2>Spaces</h2>
-${table(['Space', 'Occupancy', 'Area#', 'Occupant load#', 'Exits#'],
-  r.spaces.map(s => `<tr><td>${esc(s.name)}</td><td>${esc(s.occupancy)}</td><td class="num">${esc(fmtArea(s.area_m2, units))}</td><td class="num">${s.occupant_load ?? '—'}</td><td class="num">${s.exits}</td></tr>`),
+${table(['Space', ...(levels.length ? ['Level'] : []), 'Occupancy', 'Area#', 'Occupant load#', 'Exits#'],
+  r.spaces.map(s => `<tr><td>${esc(s.name)}</td>${levels.length ? `<td>${esc(levelName(s.level))}</td>` : ''}<td>${esc(s.occupancy)}</td><td class="num">${esc(fmtArea(s.area_m2, units))}</td><td class="num">${s.occupant_load ?? '—'}</td><td class="num">${s.exits}</td></tr>`),
   'No spaces defined.')}
 
 <h2>Clashes</h2>

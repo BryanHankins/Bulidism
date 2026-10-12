@@ -31,6 +31,9 @@ pub struct Project {
     /// Jurisdiction rule set id, e.g. "IN-2026" or "IBC-2024".
     pub rule_set: String,
     pub phases: Vec<Phase>,
+    /// Storeys, any order; elements and spaces refer to them by id. Optional in JSON.
+    #[serde(default)]
+    pub levels: Vec<Level>,
     pub elements: Vec<Element>,
     pub spaces: Vec<Space>,
     /// Unit cost in cents per quantity unit, keyed by cost code.
@@ -44,6 +47,7 @@ impl Project {
             name: name.into(),
             rule_set: rule_set.into(),
             phases: vec![],
+            levels: vec![],
             elements: vec![],
             spaces: vec![],
             unit_costs: HashMap::new(),
@@ -73,6 +77,10 @@ impl Project {
 
     pub fn phase(&self, id: PhaseId) -> Option<&Phase> {
         self.phases.iter().find(|p| p.id == id)
+    }
+
+    pub fn level(&self, id: LevelId) -> Option<&Level> {
+        self.levels.iter().find(|l| l.id == id)
     }
 
     /// Doors hosted by `wall`, as (offset, width, height) sorted by offset.
@@ -112,6 +120,25 @@ impl Project {
         for (code, _) in codes {
             errs.push(ProjectError::Invalid(format!(
                 "unit cost for '{code}' is negative"
+            )));
+        }
+        let mut lvls = std::collections::HashSet::new();
+        for l in &self.levels {
+            if !lvls.insert(l.id) {
+                errs.push(ProjectError::Invalid(format!("duplicate level {:?}", l.id)));
+            }
+        }
+        let unknown_level = |lv: Option<LevelId>| lv.is_some_and(|l| !lvls.contains(&l));
+        for e in self.elements.iter().filter(|e| unknown_level(e.level)) {
+            errs.push(ProjectError::Invalid(format!(
+                "element '{}' is on unknown level {:?}",
+                e.name, e.level
+            )));
+        }
+        for s in self.spaces.iter().filter(|s| unknown_level(s.level)) {
+            errs.push(ProjectError::Invalid(format!(
+                "space '{}' is on unknown level {:?}",
+                s.name, s.level
             )));
         }
         let mut ids = std::collections::HashSet::new();
@@ -431,7 +458,19 @@ impl Project {
             floor_area_m2: 96.0,
             egress_doors: vec![door_id, door2_id],
             bounds: Some([0.0, 0.0, 12.0, 8.0]),
+            level: Some(LevelId(0)),
         });
+        // one storey at the top of the ground slab; the entry ramp is site work
+        p.levels = vec![Level {
+            id: LevelId(0),
+            name: "Level 1".into(),
+            elevation_m: 0.2,
+        }];
+        for e in &mut p.elements {
+            if !matches!(e.kind, ElementKind::Ramp { .. }) {
+                e.level = Some(LevelId(0));
+            }
+        }
         p.assign_fixed_ids(0x5a3b_0000_0000_4000_8000_0000_0000_0000);
         p
     }
@@ -556,6 +595,28 @@ mod tests {
         p.add(dup);
         let errs = p.validate();
         assert_eq!(errs.len(), 1, "{errs:?}");
+    }
+    #[test]
+    fn levels_are_optional_and_validated() {
+        // projects saved before levels existed still load
+        let mut v: serde_json::Value =
+            serde_json::from_str(&Project::sample().to_json().unwrap()).unwrap();
+        v.as_object_mut().unwrap().remove("levels");
+        for e in v["elements"].as_array_mut().unwrap() {
+            e.as_object_mut().unwrap().remove("level");
+        }
+        v["spaces"][0].as_object_mut().unwrap().remove("level");
+        let old = Project::from_json(&v.to_string()).unwrap();
+        assert!(old.levels.is_empty() && old.elements.iter().all(|e| e.level.is_none()));
+        assert!(old.validate().is_empty());
+
+        let mut p = Project::sample();
+        assert_eq!(p.level(LevelId(0)).unwrap().name, "Level 1");
+        p.elements[0].level = Some(LevelId(7));
+        p.spaces[0].level = Some(LevelId(7));
+        p.levels.push(p.levels[0].clone());
+        let errs = p.validate();
+        assert_eq!(errs.len(), 3, "{errs:?}");
     }
     #[test]
     fn space_area_follows_bounds() {
