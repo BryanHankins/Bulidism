@@ -146,6 +146,12 @@ pub struct Element {
     /// Storey the element belongs to (None: site / unassigned).
     #[serde(default)]
     pub level: Option<LevelId>,
+    /// Element-level predecessors: each must finish before this element starts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<ElementId>,
+    /// Task duration in days; None = appears at its start with no duration of its own (legacy).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_days: Option<u32>,
 }
 
 impl Element {
@@ -166,6 +172,8 @@ impl Element {
             cost_code: String::new(),
             material: String::new(),
             level: None,
+            depends_on: vec![],
+            duration_days: None,
         }
     }
 }

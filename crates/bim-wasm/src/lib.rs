@@ -1,6 +1,6 @@
-//! Browser entry point. Strings in, strings out: the JS side holds the project
-//! JSON and calls `run` after every edit. Errors come back as `Err(String)`
-//! which wasm-bindgen turns into a thrown JS exception.
+//! Browser entry point. Strings in, strings out (file exports return bytes): the JS
+//! side holds the project JSON and calls `run` after every edit. Errors come back as
+//! `Err(String)` which wasm-bindgen turns into a thrown JS exception.
 //!
 //! Build:  wasm-pack build crates/bim-wasm --target web --out-dir ../../web/pkg
 //!    or:  cargo build -p bim-wasm --target wasm32-unknown-unknown --release &&
@@ -55,6 +55,28 @@ pub fn import_ifc(ifc_text: &str, file_name: &str) -> Result<String, String> {
     serde_json::to_string(&r).map_err(|e| e.to_string())
 }
 
+/// Parse and validate (same gate as `run`), for the file exports.
+fn valid_project(project_json: &str) -> Result<bim_core::Project, String> {
+    let p = bim_core::Project::from_json(project_json).map_err(|e| e.to_string())?;
+    bim_report::check(&p).map_err(|e| e.to_string())?;
+    Ok(p)
+}
+
+/// Takeoff workbook (.xlsx bytes; a Uint8Array in JS): sheets "Takeoff" and "By phase".
+#[wasm_bindgen]
+pub fn takeoff_xlsx(project_json: &str) -> Result<Vec<u8>, String> {
+    Ok(bim_export::xlsx(&valid_project(project_json)?))
+}
+
+/// Clashes (same tolerance as the report) as a BCF 2.1 archive (.bcfzip bytes). Components
+/// carry element UUIDs in IfcGuid form; see `bim_export::bcf`.
+#[wasm_bindgen]
+pub fn clashes_bcf(project_json: &str) -> Result<Vec<u8>, String> {
+    let p = valid_project(project_json)?;
+    let c = bim_geom::clashes(&p, bim_report::CLASH_TOLERANCE_M3);
+    Ok(bim_export::bcf(&p, &c))
+}
+
 #[wasm_bindgen]
 pub fn schema_version() -> u32 {
     bim_core::SCHEMA_VERSION
@@ -87,6 +109,25 @@ mod tests {
         let p = serde_json::to_string(&v["project"]).unwrap();
         assert!(run(&p, Some(RS.to_string())).is_ok());
         assert!(import_ifc("not ifc", "f").is_err());
+    }
+    #[test]
+    fn exports_xlsx_and_bcf() {
+        let j = sample_project().unwrap();
+        let x = takeoff_xlsx(&j).unwrap();
+        assert_eq!(&x[..4], b"PK\x03\x04");
+        assert!(x.windows(15).any(|w| w == b"xl/workbook.xml"));
+        let b = clashes_bcf(&j).unwrap();
+        assert_eq!(&b[..4], b"PK\x03\x04");
+        assert_eq!(
+            b.windows(10).filter(|w| w == b"markup.bcf").count(),
+            2 * 4,
+            "4 clash topics, each named in a local header and the central directory"
+        );
+        let mut p = bim_core::Project::from_json(&j).unwrap();
+        p.elements[0].phase = bim_core::PhaseId(99);
+        let bad = p.to_json().unwrap();
+        assert!(takeoff_xlsx(&bad).unwrap_err().contains("validation"));
+        assert!(clashes_bcf(&bad).is_err() && clashes_bcf("{").is_err());
     }
     #[test]
     fn new_project_is_valid() {

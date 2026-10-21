@@ -1,3 +1,4 @@
+use crate::index::{Lookup, ProjectIndex};
 use crate::model::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -105,6 +106,7 @@ impl Project {
 
     /// Structural integrity checks a UI must run before rendering or scheduling.
     pub fn validate(&self) -> Vec<ProjectError> {
+        let ix = ProjectIndex::new(self);
         let mut errs = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for ph in &self.phases {
@@ -212,7 +214,7 @@ impl Project {
                 ..
             } = &e.kind
             {
-                match self.element(*host) {
+                match ix.get(*host) {
                     Ok(Element {
                         kind:
                             ElementKind::Wall {
@@ -252,7 +254,7 @@ impl Project {
         }
         for w in &self.elements {
             if let ElementKind::Wall { .. } = w.kind {
-                let ops = self.openings_in(w.id);
+                let ops = ix.openings(w.id);
                 if ops.windows(2).any(|p| p[1].0 < p[0].0 + p[0].1 - 1e-4) {
                     errs.push(ProjectError::Invalid(format!(
                         "wall '{}' has overlapping door openings",
@@ -261,6 +263,7 @@ impl Project {
                 }
             }
         }
+        self.validate_element_deps(&ix, &mut errs);
         for s in &self.spaces {
             if s.area_m2() <= 0.0 {
                 errs.push(ProjectError::Invalid(format!(
@@ -269,7 +272,7 @@ impl Project {
                 )));
             }
             for d in &s.egress_doors {
-                match self.elements.iter().find(|e| e.id == *d) {
+                match ix.get(*d).ok() {
                     None => errs.push(ProjectError::Invalid(format!(
                         "space '{}' references unknown egress door",
                         s.name
@@ -285,6 +288,57 @@ impl Project {
             }
         }
         errs
+    }
+
+    /// Element `depends_on`: known ids, no self-reference, no cycles (Kahn; duplicate ids
+    /// resolve to the first element, as `element()` does).
+    fn validate_element_deps(&self, ix: &ProjectIndex, errs: &mut Vec<ProjectError>) {
+        let n = self.elements.len();
+        let mut indeg = vec![0usize; n];
+        let mut succ: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (i, e) in self.elements.iter().enumerate() {
+            let mut seen = std::collections::HashSet::new();
+            for d in &e.depends_on {
+                if *d == e.id {
+                    errs.push(ProjectError::Invalid(format!(
+                        "element '{}' depends on itself",
+                        e.name
+                    )));
+                } else if let Some(j) = ix.position(*d) {
+                    if seen.insert(j) {
+                        indeg[i] += 1;
+                        succ[j].push(i);
+                    }
+                } else {
+                    errs.push(ProjectError::Invalid(format!(
+                        "element '{}' depends on unknown element {}",
+                        e.name, d.0
+                    )));
+                }
+            }
+        }
+        let mut ready: Vec<usize> = (0..n).filter(|&i| indeg[i] == 0).collect();
+        let mut done = 0;
+        while let Some(i) = ready.pop() {
+            done += 1;
+            for &s in &succ[i] {
+                indeg[s] -= 1;
+                if indeg[s] == 0 {
+                    ready.push(s);
+                }
+            }
+        }
+        if done < n {
+            let stuck: Vec<&str> = (0..n)
+                .filter(|&i| indeg[i] > 0)
+                .map(|i| self.elements[i].name.as_str())
+                .collect();
+            errs.push(ProjectError::Invalid(format!(
+                "element dependency cycle (blocking {} element(s)), including '{}'",
+                stuck.len(),
+                stuck[0]
+            )));
+        }
     }
 
     /// Small demo used by the viewer and tests. Entry door is deliberately
@@ -491,6 +545,11 @@ impl Project {
                     *host = *n;
                 }
             }
+            for d in &mut e.depends_on {
+                if let Some(n) = map.get(d) {
+                    *d = *n;
+                }
+            }
         }
         for s in &mut self.spaces {
             for d in &mut s.egress_doors {
@@ -647,6 +706,39 @@ mod tests {
         let b = Project::sample();
         assert_eq!(a, b);
         assert!(a.validate().is_empty());
+    }
+    #[test]
+    fn element_deps_validated() {
+        let mut p = Project::sample();
+        let ids: Vec<ElementId> = p.elements.iter().map(|e| e.id).collect();
+        // empty fields are not written, so legacy JSON stays byte-identical
+        let j = serde_json::to_value(&p.elements[0]).unwrap();
+        assert!(j.get("depends_on").is_none() && j.get("duration_days").is_none());
+        p.elements[1].depends_on = vec![ids[0]];
+        p.elements[1].duration_days = Some(3);
+        assert!(p.validate().is_empty());
+        assert_eq!(Project::from_json(&p.to_json().unwrap()).unwrap(), p);
+        p.elements[2].depends_on = vec![ids[2], ElementId::new()];
+        let errs: Vec<String> = p.validate().iter().map(|e| e.to_string()).collect();
+        assert_eq!(errs.len(), 2, "{errs:?}");
+        assert!(errs[0].contains("itself") && errs[1].contains("unknown element"));
+        let mut p = Project::sample();
+        p.elements[0].depends_on = vec![ids[2]];
+        p.elements[1].depends_on = vec![ids[0]];
+        p.elements[2].depends_on = vec![ids[1]];
+        p.elements[3].depends_on = vec![ids[2]]; // downstream of the cycle, not on it
+        let errs: Vec<String> = p.validate().iter().map(|e| e.to_string()).collect();
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert!(errs[0].contains("cycle (blocking 4"), "{errs:?}");
+    }
+    #[test]
+    fn fixed_ids_rewrite_deps() {
+        let mut p = Project::sample();
+        let first = p.elements[0].id;
+        p.elements[1].depends_on = vec![first];
+        p.assign_fixed_ids(7 << 64);
+        assert_eq!(p.elements[1].depends_on, vec![p.elements[0].id]);
+        assert!(p.validate().is_empty());
     }
     #[test]
     fn openings_sorted() {

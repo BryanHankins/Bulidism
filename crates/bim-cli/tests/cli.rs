@@ -106,3 +106,16 @@ fn default_rules_follow_project_rule_set() {
     assert!(ok, "{err}");
     assert!(out.contains("evaluated against 'IN-2026'"), "{out}");
 }
+
+#[test]
+fn writes_xlsx_and_bcf() {
+    let dir = std::env::temp_dir().join("bim-cli-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (x, b) = (dir.join("t.xlsx"), dir.join("c.bcfzip"));
+    let (ok, out, err) = run(&["--xlsx", x.to_str().unwrap(), "--bcf", b.to_str().unwrap()]);
+    assert!(ok, "{err}");
+    assert!(out.contains("t.xlsx") && out.contains("c.bcfzip"), "{out}");
+    for f in [&x, &b] {
+        assert_eq!(&std::fs::read(f).unwrap()[..4], b"PK\x03\x04");
+    }
+}

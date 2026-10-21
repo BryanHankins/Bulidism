@@ -13,6 +13,8 @@ crate-type = ["cdylib", "rlib"]
 bim-core.workspace = true
 bim-report.workspace = true
 bim-ifc.workspace = true
+bim-geom.workspace = true
+bim-export.workspace = true
 serde_json.workspace = true
 # exact pin: 0.2.92 builds on cargo 1.75; bump freely on a current toolchain (keep wasm-bindgen-cli at the same version)
 wasm-bindgen = "=0.2.92"
