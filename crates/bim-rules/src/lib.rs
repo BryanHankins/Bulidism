@@ -94,14 +94,15 @@ pub enum RuleError {
 }
 
 /// Distinct referenced doors that are actually marked egress.
-pub fn egress_exits(p: &Project, s: &Space) -> usize {
+/// Takes any `Lookup`; pass a `ProjectIndex` when counting for every space.
+pub fn egress_exits<L: Lookup + ?Sized>(p: &L, s: &Space) -> usize {
     let mut ids: Vec<ElementId> = s
         .egress_doors
         .iter()
         .copied()
         .filter(|d| {
             matches!(
-                p.element(*d).map(|e| &e.kind),
+                p.get(*d).map(|e| &e.kind),
                 Ok(ElementKind::Door {
                     is_egress: true,
                     ..
@@ -258,9 +259,10 @@ impl RuleSet {
                     area_per_occupant_m2,
                     max_occupants_single_exit,
                 } => {
+                    let ix = ProjectIndex::new(p);
                     for s in p.spaces.iter().filter(|s| s.occupancy == *occupancy) {
                         let load = (s.area_m2() / area_per_occupant_m2).ceil() as u32;
-                        let exits = egress_exits(p, s);
+                        let exits = egress_exits(&ix, s);
                         if load > *max_occupants_single_exit && exits < 2 {
                             hits.push((s.name.clone(), format!("occupant load {load} > {max_occupants_single_exit} with {exits} exit(s)")));
                         }

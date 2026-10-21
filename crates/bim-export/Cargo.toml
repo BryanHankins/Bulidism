@@ -1,0 +1,16 @@
+[package]
+name = "bim-export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bim-core.workspace = true
+bim-geom.workspace = true
+bim-schedule.workspace = true
+bim-takeoff.workspace = true
+uuid.workspace = true
+glam.workspace = true
+
+[dev-dependencies]
+bim-ifc.workspace = true

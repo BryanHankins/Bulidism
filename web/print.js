@@ -1,6 +1,9 @@
 // Printable code-check report: a standalone page the browser prints or saves as PDF.
 // Pure function of the engine report, so it can be tested without a browser.
 import { fmtArea, fmtVol } from './units.js';
+import './cites.js';
+
+const { citeHtml } = globalThis.BuildsimCites;
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
 const money = v => '$' + (+v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -66,12 +69,12 @@ tr { break-inside: avoid; } td.num, th.num { text-align: right; white-space: now
 
 <h2>Findings</h2>
 ${table(['##', 'Severity', 'Element / space', 'Finding', 'Citation'],
-  findings.map((a, i) => `<tr><td class="num">${i + 1}</td><td class="sev ${esc(a.severity)}">${esc(LABEL[a.severity] || a.severity)}</td><td>${esc(a.subject)}</td><td>${esc(a.message)}</td><td>${esc(a.cite)}</td></tr>`),
+  findings.map((a, i) => `<tr><td class="num">${i + 1}</td><td class="sev ${esc(a.severity)}">${esc(LABEL[a.severity] || a.severity)}</td><td>${esc(a.subject)}</td><td>${esc(a.message)}</td><td>${citeHtml(a.cite)}</td></tr>`),
   'No findings from this rule set.')}
 
 <h2>Rules checked</h2>
 ${table(['Rule', 'Citation', 'Result', 'Parameter verification'],
-  (r.rules_checked || []).map(c => `<tr><td>${esc(c.id)}</td><td>${esc(c.cite)}</td><td>${c.findings ? `<span class="sev ${esc(c.severity)}">${c.findings} finding${c.findings === 1 ? '' : 's'}</span>` : 'No findings'}</td><td class="${c.verified && !/unverified|secondary/i.test(c.verified) ? '' : 'unverified'}">${esc(c.verified || 'Unverified')}</td></tr>`),
+  (r.rules_checked || []).map(c => `<tr><td>${esc(c.id)}</td><td>${citeHtml(c.cite)}</td><td>${c.findings ? `<span class="sev ${esc(c.severity)}">${c.findings} finding${c.findings === 1 ? '' : 's'}</span>` : 'No findings'}</td><td class="${c.verified && !/unverified|secondary/i.test(c.verified) ? '' : 'unverified'}">${esc(c.verified || 'Unverified')}</td></tr>`),
   'No rule file was loaded, so no code checks ran.')}
 
 <h2>Spaces</h2>

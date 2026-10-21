@@ -1,7 +1,9 @@
-//! Parametric element -> triangle mesh, plus clash detection (AABB broadphase,
-//! exact plan-polygon x height narrowphase).
-//! Walls are oriented boxes split around door openings (no CSG needed);
-//! stairs are stepped; ramps are wedges. Units: metres, Y up.
+//! Parametric element -> triangle mesh, plus clash detection (BVH broadphase over
+//! element AABBs, exact plan-polygon x height narrowphase).
+//! Walls are oriented boxes split around door openings (no CSG needed); beams follow
+//! start -> end including slope; stairs are stepped; ramps are wedges. Units: metres, Y up.
+//! Functions take any `Lookup`: a `Project` for one-off calls, a `ProjectIndex` for passes
+//! over every element (hashed host/opening lookups instead of scans).
 use bim_core::*;
 use glam::{vec3, Mat3, Vec2, Vec3};
 
@@ -144,9 +146,11 @@ pub fn box_mesh(b: &Aabb) -> Mesh {
     m
 }
 
-/// Box whose local +X axis runs from `start` toward `end` in plan (yaw only),
-/// spanning [u0,u1] along that axis, centred laterally with `thickness`, from
-/// `y0` to `y1` vertically. Used for walls and beams.
+/// Box whose local +X axis runs from `start` toward `end` in plan (yaw), spanning
+/// [u0,u1] (plan metres) along that axis, centred laterally with `thickness`, from
+/// `y0` to `y1` vertically, sheared up by `slope` (rise per plan metre; vertical
+/// edges stay plumb). Used for walls (slope 0) and beams.
+#[allow(clippy::too_many_arguments)]
 fn oriented_segment(
     start: Vec3,
     end: Vec3,
@@ -155,6 +159,7 @@ fn oriented_segment(
     thickness: f32,
     y0: f32,
     y1: f32,
+    slope: f32,
 ) -> Mesh {
     let d = end - start;
     let yaw = (-d.z).atan2(d.x);
@@ -164,9 +169,19 @@ fn oriented_segment(
         max: vec3(u1, y1, thickness / 2.0),
     });
     let origin = vec3(start.x, 0.0, start.z);
+    let (xf, nf) = if slope == 0.0 {
+        (rot, rot)
+    } else {
+        let m = Mat3::from_cols(rot.x_axis + Vec3::Y * slope, rot.y_axis, rot.z_axis);
+        (m, m.inverse().transpose())
+    };
     Mesh {
-        positions: local.positions.iter().map(|p| rot * *p + origin).collect(),
-        normals: local.normals.iter().map(|n| rot * *n).collect(),
+        positions: local.positions.iter().map(|p| xf * *p + origin).collect(),
+        normals: local
+            .normals
+            .iter()
+            .map(|n| (nf * *n).normalize_or_zero())
+            .collect(),
         indices: local.indices,
     }
 }
@@ -201,7 +216,7 @@ fn wedge_mesh(base: Vec3, run: f32, rise: f32, width: f32) -> Mesh {
 }
 
 /// World-space bounds without building a mesh (fast path for clash/broadphase).
-pub fn aabb(project: &Project, e: &Element) -> Result<Aabb, GeomError> {
+pub fn aabb<L: Lookup + ?Sized>(project: &L, e: &Element) -> Result<Aabb, GeomError> {
     Ok(match &e.kind {
         ElementKind::Wall {
             start,
@@ -275,7 +290,7 @@ pub fn aabb(project: &Project, e: &Element) -> Result<Aabb, GeomError> {
             height,
             ..
         } => {
-            let hw = project.element(*host)?;
+            let hw = project.get(*host)?;
             let ElementKind::Wall {
                 start,
                 end,
@@ -299,7 +314,7 @@ pub fn aabb(project: &Project, e: &Element) -> Result<Aabb, GeomError> {
 }
 
 /// Render mesh. Doors return the leaf panel (thin box in the opening).
-pub fn mesh_for(project: &Project, e: &Element) -> Result<Mesh, GeomError> {
+pub fn mesh_for<L: Lookup + ?Sized>(project: &L, e: &Element) -> Result<Mesh, GeomError> {
     Ok(match &e.kind {
         ElementKind::Wall {
             start,
@@ -312,11 +327,11 @@ pub fn mesh_for(project: &Project, e: &Element) -> Result<Mesh, GeomError> {
             let y1 = y0 + height;
             let mut m = Mesh::default();
             let mut cursor = 0.0;
-            for (off, w, h) in project.openings_in(e.id) {
+            for &(off, w, h) in project.openings(e.id).iter() {
                 let (off, w) = (off.clamp(0.0, len), w.min(len - off.clamp(0.0, len)));
                 if off > cursor {
                     m.append(oriented_segment(
-                        *start, *end, cursor, off, *thickness, y0, y1,
+                        *start, *end, cursor, off, *thickness, y0, y1, 0.0,
                     ));
                 }
                 if h < *height {
@@ -328,6 +343,7 @@ pub fn mesh_for(project: &Project, e: &Element) -> Result<Mesh, GeomError> {
                         *thickness,
                         y0 + h,
                         y1,
+                        0.0,
                     ));
                 }
                 // overlapping openings must never move the cursor backwards over a gap
@@ -335,7 +351,7 @@ pub fn mesh_for(project: &Project, e: &Element) -> Result<Mesh, GeomError> {
             }
             if cursor < len {
                 m.append(oriented_segment(
-                    *start, *end, cursor, len, *thickness, y0, y1,
+                    *start, *end, cursor, len, *thickness, y0, y1, 0.0,
                 ));
             }
             m
@@ -346,9 +362,23 @@ pub fn mesh_for(project: &Project, e: &Element) -> Result<Mesh, GeomError> {
             width,
             depth,
         } => {
-            let len = start.distance(*end);
-            // beams may slope: treat as oriented in plan, spanning y from start.y (approximation for LOD200)
-            oriented_segment(*start, *end, 0.0, len, *width, start.y, start.y + depth)
+            // plan run with plumb-cut section [y, y + depth] along the slope (matches aabb());
+            // a vertical member has no plan direction, so it is drawn as its bounds
+            let run = Vec2::new(end.x - start.x, end.z - start.z).length();
+            if run < 1e-6 {
+                return Ok(box_mesh(&aabb(project, e)?));
+            }
+            let slope = (end.y - start.y) / run;
+            oriented_segment(
+                *start,
+                *end,
+                0.0,
+                run,
+                *width,
+                start.y,
+                start.y + depth,
+                slope,
+            )
         }
         ElementKind::Stair {
             base,
@@ -386,7 +416,7 @@ pub fn mesh_for(project: &Project, e: &Element) -> Result<Mesh, GeomError> {
             height,
             ..
         } => {
-            let hw = project.element(*host)?;
+            let hw = project.get(*host)?;
             let ElementKind::Wall {
                 start,
                 end,
@@ -404,6 +434,7 @@ pub fn mesh_for(project: &Project, e: &Element) -> Result<Mesh, GeomError> {
                 thickness * 0.2,
                 start.y,
                 start.y + height,
+                0.0,
             )
         }
         ElementKind::Slab { .. } | ElementKind::Column { .. } => box_mesh(&aabb(project, e)?),
@@ -423,7 +454,7 @@ pub struct Clash {
 /// Element as a vertical prism: convex plan footprint (XZ) plus [y0, y1].
 /// Walls and beams are rotated rectangles, so diagonal members are not
 /// inflated to their AABB. Ramps/stairs use their bounding box (conservative).
-fn prism(project: &Project, e: &Element) -> Option<(Vec<Vec2>, f32, f32)> {
+fn prism<L: Lookup + ?Sized>(project: &L, e: &Element) -> Option<(Vec<Vec2>, f32, f32)> {
     let rotated = |start: &Vec3, end: &Vec3, w: f32| {
         let (s, t) = (Vec2::new(start.x, start.z), Vec2::new(end.x, end.z));
         let n = (t - s).normalize_or_zero().perp() * (w / 2.0);
@@ -495,7 +526,7 @@ fn clip_convex(subject: &[Vec2], clip: &[Vec2]) -> Vec<Vec2> {
 }
 
 /// Exact overlap of two element prisms, or None if they do not overlap.
-fn overlap(project: &Project, a: &Element, b: &Element) -> Option<(f32, Aabb)> {
+fn overlap<L: Lookup + ?Sized>(project: &L, a: &Element, b: &Element) -> Option<(f32, Aabb)> {
     let (pa, a0, a1) = prism(project, a)?;
     let (pb, b0, b1) = prism(project, b)?;
     let (y0, y1) = (a0.max(b0), a1.min(b1));
@@ -519,42 +550,148 @@ fn overlap(project: &Project, a: &Element, b: &Element) -> Option<(f32, Aabb)> {
     ))
 }
 
-/// Cross-discipline clashes: sort-and-sweep on AABB X, then exact prism overlap.
+/// Bounding-volume hierarchy over item boxes: median split on the longest
+/// centroid axis, leaves of at most `LEAF` items. Deterministic for a given input.
+struct Bvh {
+    nodes: Vec<BvhNode>,
+    items: Vec<u32>,
+}
+struct BvhNode {
+    b: Aabb,
+    /// Leaf: items[start..end]. Inner: children at `start` and `end` (node indices).
+    start: u32,
+    end: u32,
+    leaf: bool,
+}
+impl Bvh {
+    const LEAF: usize = 4;
+    fn new(boxes: &[Aabb]) -> Self {
+        let mut t = Bvh {
+            nodes: Vec::with_capacity(boxes.len() / 2 + 1),
+            items: (0..boxes.len() as u32).collect(),
+        };
+        if !boxes.is_empty() {
+            t.build(boxes, 0, boxes.len());
+        }
+        t
+    }
+    fn build(&mut self, boxes: &[Aabb], lo: usize, hi: usize) -> u32 {
+        let items = &mut self.items[lo..hi];
+        let b0 = boxes[items[0] as usize];
+        let (b, cmin, cmax) = items.iter().fold((b0, b0.min, b0.min), |(b, lo, hi), &i| {
+            let x = boxes[i as usize];
+            let c = (x.min + x.max) * 0.5;
+            (
+                Aabb {
+                    min: b.min.min(x.min),
+                    max: b.max.max(x.max),
+                },
+                lo.min(c),
+                hi.max(c),
+            )
+        });
+        let id = self.nodes.len() as u32;
+        if items.len() <= Self::LEAF {
+            self.nodes.push(BvhNode {
+                b,
+                start: lo as u32,
+                end: hi as u32,
+                leaf: true,
+            });
+            return id;
+        }
+        let ext = cmax - cmin;
+        let axis = if ext.x >= ext.y && ext.x >= ext.z {
+            0
+        } else if ext.y >= ext.z {
+            1
+        } else {
+            2
+        };
+        let key = |i: &u32| {
+            let x = boxes[*i as usize];
+            x.min[axis] + x.max[axis]
+        };
+        let mid = items.len() / 2;
+        items.select_nth_unstable_by(mid, |a, b| key(a).total_cmp(&key(b)));
+        self.nodes.push(BvhNode {
+            b,
+            start: 0,
+            end: 0,
+            leaf: false,
+        });
+        let l = self.build(boxes, lo, lo + mid);
+        let r = self.build(boxes, lo + mid, hi);
+        let n = &mut self.nodes[id as usize];
+        (n.start, n.end) = (l, r);
+        id
+    }
+    /// Every item j whose box strictly intersects `q`.
+    fn query(&self, boxes: &[Aabb], q: &Aabb, stack: &mut Vec<u32>, mut hit: impl FnMut(usize)) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        stack.clear();
+        stack.push(0);
+        while let Some(n) = stack.pop() {
+            let n = &self.nodes[n as usize];
+            if !n.b.intersects(q) {
+                continue;
+            }
+            if n.leaf {
+                for &j in &self.items[n.start as usize..n.end as usize] {
+                    if boxes[j as usize].intersects(q) {
+                        hit(j as usize);
+                    }
+                }
+            } else {
+                stack.extend([n.end, n.start]);
+            }
+        }
+    }
+}
+
+/// Cross-discipline clashes: BVH over element AABBs, then exact prism overlap.
+/// Output order is fixed: pairs ordered by the elements' AABB min.x rank (stable, so
+/// ties keep model order), first by `a` then by `b`; `a` is the lower-ranked element.
 /// Doors excluded (they live inside their host). Same-discipline contact (beam
 /// on column, wall on slab) is intentional framing, so it is not reported.
 /// `tolerance_m3`: ignore overlaps smaller than this (touching faces, minor penetration).
 pub fn clashes(project: &Project, tolerance_m3: f32) -> Vec<Clash> {
-    let mut boxes: Vec<(&Element, Aabb)> = project
+    let ix = ProjectIndex::new(project);
+    let mut items: Vec<(&Element, Aabb)> = project
         .elements
         .iter()
         .filter(|e| !matches!(e.kind, ElementKind::Door { .. }))
-        .filter_map(|e| aabb(project, e).ok().map(|b| (e, b)))
+        .filter_map(|e| aabb(&ix, e).ok().map(|b| (e, b)))
         .collect();
-    boxes.sort_by(|a, b| a.1.min.x.total_cmp(&b.1.min.x));
-    let mut out = Vec::new();
-    for i in 0..boxes.len() {
-        let (ea, ba) = boxes[i];
-        for &(eb, bb) in &boxes[i + 1..] {
-            if bb.min.x >= ba.max.x {
-                break;
+    items.sort_by(|a, b| a.1.min.x.total_cmp(&b.1.min.x));
+    // after the sort an item's index is its rank
+    let boxes: Vec<Aabb> = items.iter().map(|x| x.1).collect();
+    let bvh = Bvh::new(&boxes);
+    let mut pairs: Vec<(u32, u32)> = Vec::new();
+    let mut stack = Vec::new();
+    for (i, (ea, ba)) in items.iter().enumerate() {
+        bvh.query(&boxes, ba, &mut stack, |j| {
+            if j > i && ea.discipline != items[j].0.discipline {
+                pairs.push((i as u32, j as u32));
             }
-            if ea.discipline == eb.discipline || !ba.intersects(&bb) {
-                continue;
-            }
-            let Some((v, region)) = overlap(project, ea, eb) else {
-                continue;
-            };
-            if v > tolerance_m3 {
-                out.push(Clash {
-                    a: ea.id,
-                    b: eb.id,
-                    overlap_m3: v,
-                    region,
-                });
-            }
-        }
+        });
     }
-    out
+    pairs.sort_unstable();
+    pairs
+        .into_iter()
+        .filter_map(|(i, j)| {
+            let (ea, eb) = (items[i as usize].0, items[j as usize].0);
+            let (v, region) = overlap(&ix, ea, eb)?;
+            (v > tolerance_m3).then_some(Clash {
+                a: ea.id,
+                b: eb.id,
+                overlap_m3: v,
+                region,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -721,6 +858,150 @@ mod tests {
         assert!((signed_area(&clip_convex(&sq, &shifted)).abs() - 1.0).abs() < 1e-5);
         let far: Vec<Vec2> = sq.iter().map(|p| *p + Vec2::splat(5.0)).collect();
         assert!(clip_convex(&sq, &far).len() < 3);
+    }
+    /// Reference: every pair, same ordering contract as `clashes`.
+    fn clashes_brute(project: &Project, tol: f32) -> Vec<Clash> {
+        let mut items: Vec<(&Element, Aabb)> = project
+            .elements
+            .iter()
+            .filter(|e| !matches!(e.kind, ElementKind::Door { .. }))
+            .filter_map(|e| aabb(project, e).ok().map(|b| (e, b)))
+            .collect();
+        items.sort_by(|a, b| a.1.min.x.total_cmp(&b.1.min.x));
+        let mut out = Vec::new();
+        for i in 0..items.len() {
+            for j in i + 1..items.len() {
+                let ((ea, ba), (eb, bb)) = (items[i], items[j]);
+                if ea.discipline == eb.discipline || !ba.intersects(&bb) {
+                    continue;
+                }
+                if let Some((v, region)) = overlap(project, ea, eb) {
+                    if v > tol {
+                        out.push(Clash {
+                            a: ea.id,
+                            b: eb.id,
+                            overlap_m3: v,
+                            region,
+                        });
+                    }
+                }
+            }
+        }
+        out
+    }
+    #[test]
+    fn bvh_matches_brute_force_on_random_project() {
+        let mut seed: u64 = 0x5eed_b111;
+        let mut rnd = || {
+            // Numerical Recipes LCG, top bits
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 40) as f32 / (1u64 << 24) as f32
+        };
+        let mut p = Project::new("random", "IBC-2024");
+        let discs = [
+            Discipline::Architectural,
+            Discipline::Structural,
+            Discipline::Mechanical,
+            Discipline::Plumbing,
+        ];
+        for i in 0..2000 {
+            let at = vec3(rnd() * 60.0, rnd() * 12.0, rnd() * 60.0);
+            let kind = match i % 4 {
+                0 => ElementKind::Wall {
+                    start: at,
+                    end: at + vec3(rnd() * 8.0 - 4.0, 0.0, rnd() * 8.0 - 4.0),
+                    height: 1.0 + rnd() * 3.0,
+                    thickness: 0.1 + rnd() * 0.3,
+                },
+                1 => ElementKind::Column {
+                    base: at,
+                    width: 0.2 + rnd() * 0.6,
+                    depth: 0.2 + rnd() * 0.6,
+                    height: 1.0 + rnd() * 4.0,
+                },
+                2 => ElementKind::Beam {
+                    start: at,
+                    end: at + vec3(rnd() * 10.0 - 5.0, rnd() * 2.0 - 1.0, rnd() * 10.0 - 5.0),
+                    width: 0.2 + rnd() * 0.3,
+                    depth: 0.2 + rnd() * 0.6,
+                },
+                _ => ElementKind::Slab {
+                    origin: at,
+                    size_x: 1.0 + rnd() * 6.0,
+                    size_z: 1.0 + rnd() * 6.0,
+                    thickness: 0.1 + rnd() * 0.3,
+                },
+            };
+            let d = discs[(rnd() * 4.0) as usize % 4];
+            p.add(Element::new(format!("e{i}"), kind, d, PhaseId(0)));
+        }
+        let fast = clashes(&p, 0.0);
+        let slow = clashes_brute(&p, 0.0);
+        assert!(
+            fast.len() > 100,
+            "test should exercise many clashes: {}",
+            fast.len()
+        );
+        assert_eq!(fast, slow);
+        assert_eq!(clashes(&p, 0.05), clashes_brute(&p, 0.05));
+        assert!(clashes(&Project::new("e", "x"), 0.0).is_empty());
+    }
+    #[test]
+    fn sloped_beam_mesh_follows_its_axis() {
+        let p = Project::new("x", "IBC-2024");
+        let e = Element::new(
+            "rafter",
+            ElementKind::Beam {
+                start: vec3(1.0, 3.0, 2.0),
+                end: vec3(7.0, 5.0, 2.0),
+                width: 0.2,
+                depth: 0.4,
+            },
+            Discipline::Structural,
+            PhaseId(0),
+        );
+        let m = mesh_for(&p, &e).unwrap();
+        let (mb, ab) = (m.aabb().unwrap(), aabb(&p, &e).unwrap());
+        // the AABB pads both plan axes by width/2 (conservative); Y must match exactly
+        assert!(
+            mb.min.cmpge(ab.min - 1e-4).all() && mb.max.cmple(ab.max + 1e-4).all(),
+            "{mb:?} vs {ab:?}"
+        );
+        assert!((mb.min.y - 3.0).abs() < 1e-4 && (mb.max.y - 5.4).abs() < 1e-4);
+        assert!((mb.min.x - 1.0).abs() < 1e-4 && (mb.max.x - 7.0).abs() < 1e-4);
+        // every vertex sits on the section band above the axis at its x
+        for v in &m.positions {
+            let y_axis = 3.0 + (v.x - 1.0) / 6.0 * 2.0;
+            assert!(v.y > y_axis - 1e-4 && v.y < y_axis + 0.4 + 1e-4, "{v:?}");
+        }
+        // top face normal tilts back against the slope, unit length
+        assert!(m
+            .normals
+            .iter()
+            .any(|n| n.y > 0.9 && n.x < -0.1 && (n.length() - 1.0).abs() < 1e-4));
+        // a vertical member falls back to its bounds; horizontal beams are unchanged
+        let mut v = e.clone();
+        v.kind = ElementKind::Beam {
+            start: vec3(0.0, 0.0, 0.0),
+            end: vec3(0.0, 3.0, 0.0),
+            width: 0.2,
+            depth: 0.2,
+        };
+        assert_eq!(mesh_for(&p, &v).unwrap().aabb(), aabb(&p, &v).ok());
+        let sp = Project::sample();
+        let roof = by_name(&sp, "Roof beam");
+        assert_eq!(mesh_for(&sp, roof).unwrap().triangle_count(), 12);
+    }
+    #[test]
+    fn index_and_project_meshes_agree() {
+        let p = Project::sample();
+        let ix = ProjectIndex::new(&p);
+        for e in &p.elements {
+            assert_eq!(mesh_for(&p, e).ok(), mesh_for(&ix, e).ok());
+            assert_eq!(aabb(&p, e).ok(), aabb(&ix, e).ok());
+        }
     }
     #[test]
     fn mesh_element_has_no_geometry() {

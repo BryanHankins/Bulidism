@@ -1,5 +1,6 @@
 //! Headless pipeline: runs bim_report::build (validate -> schedule -> advisories -> clashes -> takeoff).
-//! Usage: bim-cli [project.json | model.ifc] [--rules rules/<project rule_set>.json] [--csv out.csv] [--html report.html] [--sample-out sample.json]
+//! Usage: bim-cli [project.json | model.ifc] [--rules rules/<project rule_set>.json] [--csv out.csv]
+//!        [--xlsx out.xlsx] [--bcf clashes.bcfzip] [--html report.html] [--sample-out sample.json]
 //! --html writes a self-contained 4D viewer (three.js inlined) with all geometry, schedule,
 //! cost, clash and advisory data computed here in Rust — the hybrid render path from the plan.
 use std::{env, fs, process::ExitCode};
@@ -9,6 +10,7 @@ const VIEWER_HTML: &str = include_str!("../viewer.html");
 const THREE_JS: &str = include_str!("../vendor/three.r128.min.js");
 const VIEWER_CSS: &str = include_str!("../../../web/viewer.css");
 const VIEWER_JS: &str = include_str!("../../../web/viewer.js");
+const CITES_JS: &str = include_str!("../../../web/cites.js");
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -159,6 +161,22 @@ fn main() -> ExitCode {
         }
         println!("wrote {csv}");
     }
+    let exports: [(&str, &dyn Fn() -> Vec<u8>); 2] = [
+        ("--xlsx", &|| bim_export::xlsx(&project)),
+        ("--bcf", &|| {
+            let c = bim_geom::clashes(&project, bim_report::CLASH_TOLERANCE_M3);
+            bim_export::bcf(&project, &c)
+        }),
+    ];
+    for (name, make) in exports {
+        if let Some(out) = flag(name) {
+            if let Err(e) = fs::write(&out, make()) {
+                eprintln!("{}: {e}", &name[2..]);
+                return ExitCode::FAILURE;
+            }
+            println!("wrote {out}");
+        }
+    }
     ExitCode::SUCCESS
 }
 
@@ -170,6 +188,7 @@ fn render_html(report: &bim_report::Report) -> Result<String, String> {
         .replace('<', "\\u003c");
     Ok(VIEWER_HTML
         .replacen("/*__CSS__*/", VIEWER_CSS, 1)
+        .replacen("/*__CITES__*/", CITES_JS, 1)
         .replacen("/*__THREE__*/", THREE_JS, 1)
         .replacen("/*__VIEWER__*/", VIEWER_JS, 1)
         .replacen("/*__DATA__*/", &json, 1))

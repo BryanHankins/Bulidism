@@ -6,6 +6,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 Push-Location $root
 wasm-pack build crates/bim-wasm --target web --out-dir ../../web/pkg --release
+New-Item -ItemType Directory -Force web/rules | Out-Null
 Copy-Item rules/*.json web/rules/ -Force
 Pop-Location
 Write-Host "built web/pkg" -ForegroundColor Green

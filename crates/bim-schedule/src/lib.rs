@@ -1,4 +1,4 @@
-//! Phase DAG -> critical-path schedule -> 4D visibility at day t.
+//! Phase DAG -> critical-path schedule -> element tasks (own DAG) -> 4D visibility at day t.
 use bim_core::*;
 use std::collections::{HashMap, HashSet};
 
@@ -10,6 +10,17 @@ pub enum ScheduleError {
     UnknownDependency(PhaseId, PhaseId),
     #[error("duplicate phase id {0:?}")]
     DuplicatePhase(PhaseId),
+    #[error("element dependency cycle involving {}", .0.0)]
+    ElementCycle(ElementId),
+    #[error("element {} depends on unknown element {}", .0.0, .1.0)]
+    UnknownElement(ElementId, ElementId),
+}
+
+/// An element task's days: appears at `start_day`, done at `finish_day` (= start + duration).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ElementSpan {
+    pub start_day: u32,
+    pub finish_day: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -48,6 +59,71 @@ impl Schedule {
     pub fn element_visible(&self, e: &Element, t: u32) -> bool {
         self.element_start_day(e).is_some_and(|d| t >= d)
     }
+}
+
+/// Element tasks in `project.elements` order. start = max(phase start + offset (clamped to
+/// the phase end, as `element_start_day`), finish of every predecessor); finish = start +
+/// `duration_days` (0 when None). Elements on an unknown phase start at day 0. Predecessors
+/// may push an element past its phase end; phase CPM is not changed by that.
+pub fn element_spans(project: &Project, s: &Schedule) -> Result<Vec<ElementSpan>, ScheduleError> {
+    let els = &project.elements;
+    let mut idx: HashMap<ElementId, usize> = HashMap::with_capacity(els.len());
+    for (i, e) in els.iter().enumerate() {
+        idx.entry(e.id).or_insert(i);
+    }
+    let mut indeg = vec![0usize; els.len()];
+    let mut succ: Vec<Vec<usize>> = vec![Vec::new(); els.len()];
+    for (i, e) in els.iter().enumerate() {
+        let mut seen = HashSet::new();
+        for d in &e.depends_on {
+            let &j = idx.get(d).ok_or(ScheduleError::UnknownElement(e.id, *d))?;
+            if seen.insert(j) {
+                indeg[i] += 1;
+                succ[j].push(i);
+            }
+        }
+    }
+    let mut spans: Vec<ElementSpan> = els
+        .iter()
+        .map(|e| {
+            let d = s.element_start_day(e).unwrap_or(0);
+            ElementSpan {
+                start_day: d,
+                finish_day: d,
+            }
+        })
+        .collect();
+    let mut ready: Vec<usize> = (0..els.len()).filter(|&i| indeg[i] == 0).collect();
+    let mut done = 0;
+    while let Some(i) = ready.pop() {
+        done += 1;
+        // every predecessor of i is final, and has already raised spans[i].start_day
+        let sp = &mut spans[i];
+        sp.finish_day = sp
+            .start_day
+            .saturating_add(els[i].duration_days.unwrap_or(0));
+        let fin = sp.finish_day;
+        for &n in &succ[i] {
+            spans[n].start_day = spans[n].start_day.max(fin);
+            indeg[n] -= 1;
+            if indeg[n] == 0 {
+                ready.push(n);
+            }
+        }
+    }
+    if done != els.len() {
+        let i = (0..els.len()).find(|&i| indeg[i] > 0).unwrap_or(0);
+        return Err(ScheduleError::ElementCycle(els[i].id));
+    }
+    Ok(spans)
+}
+
+/// Project finish: the later of the phase CPM end and the last element finish.
+pub fn project_finish(s: &Schedule, spans: &[ElementSpan]) -> u32 {
+    spans
+        .iter()
+        .map(|e| e.finish_day)
+        .fold(s.total_days, u32::max)
 }
 
 /// Kahn topological order over phase ids; error names one node on a cycle.
@@ -201,6 +277,52 @@ mod tests {
         let s = schedule(&p.phases).unwrap();
         p.elements[0].start_offset_days = u32::MAX;
         assert_eq!(s.element_start_day(&p.elements[0]), Some(10));
+    }
+    #[test]
+    fn element_tasks_follow_predecessors() {
+        let mut p = Project::sample();
+        let s = schedule(&p.phases).unwrap();
+        // legacy: no deps or durations -> start = phase start + offset, finish = start
+        let legacy = element_spans(&p, &s).unwrap();
+        for (e, sp) in p.elements.iter().zip(&legacy) {
+            assert_eq!(Some(sp.start_day), s.element_start_day(e));
+            assert_eq!(sp.finish_day, sp.start_day);
+        }
+        assert_eq!(project_finish(&s, &legacy), 57);
+        let id = |p: &Project, n: &str| p.elements.iter().position(|e| e.name == n).unwrap();
+        let (c1, beam, south) = (
+            id(&p, "Column 1"),
+            id(&p, "Roof beam"),
+            id(&p, "South wall"),
+        );
+        p.elements[c1].duration_days = Some(12); // structure starts day 10 -> column done day 22
+        p.elements[beam].depends_on = vec![p.elements[c1].id]; // offset says 18, column says 22
+        p.elements[beam].duration_days = Some(3);
+        p.elements[south].depends_on = vec![p.elements[beam].id]; // envelope starts 25 = beam finish
+        p.elements[south].duration_days = Some(40); // runs past the end of the project
+        let sp = element_spans(&p, &s).unwrap();
+        assert_eq!((sp[c1].start_day, sp[c1].finish_day), (10, 22));
+        assert_eq!((sp[beam].start_day, sp[beam].finish_day), (22, 25));
+        assert_eq!((sp[south].start_day, sp[south].finish_day), (25, 65));
+        assert_eq!(s.total_days, 57, "phase CPM unchanged");
+        assert_eq!(project_finish(&s, &sp), 65);
+    }
+    #[test]
+    fn element_cycle_and_unknown_dep() {
+        let mut p = Project::sample();
+        let s = schedule(&p.phases).unwrap();
+        let (a, b) = (p.elements[0].id, p.elements[1].id);
+        p.elements[0].depends_on = vec![b];
+        p.elements[1].depends_on = vec![a];
+        assert!(matches!(
+            element_spans(&p, &s),
+            Err(ScheduleError::ElementCycle(_))
+        ));
+        p.elements[1].depends_on = vec![ElementId::new()];
+        assert!(matches!(
+            element_spans(&p, &s),
+            Err(ScheduleError::UnknownElement(..))
+        ));
     }
     #[test]
     fn empty_ok() {
