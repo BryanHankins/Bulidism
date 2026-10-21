@@ -23,13 +23,13 @@ pub struct Line {
 }
 
 /// Walls are measured net of their door openings.
-pub fn quantity(p: &Project, e: &Element) -> (f32, Unit) {
+pub fn quantity<L: Lookup + ?Sized>(p: &L, e: &Element) -> (f32, Unit) {
     match &e.kind {
         ElementKind::Wall {
             start, end, height, ..
         } => {
             let openings: f32 = p
-                .openings_in(e.id)
+                .openings(e.id)
                 .iter()
                 .map(|(_, w, h)| w * h.min(*height))
                 .sum();
@@ -65,11 +65,13 @@ pub fn quantity(p: &Project, e: &Element) -> (f32, Unit) {
     }
 }
 
+/// One line per element, in `p.elements` order.
 pub fn takeoff(p: &Project) -> Vec<Line> {
+    let ix = ProjectIndex::new(p);
     p.elements
         .iter()
         .map(|e| {
-            let (qty, unit) = quantity(p, e);
+            let (qty, unit) = quantity(&ix, e);
             let unit_cost = p.unit_costs.get(&e.cost_code).copied().unwrap_or_default();
             Line {
                 element: e.id,

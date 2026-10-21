@@ -7,6 +7,8 @@ name = "bim-cli"
 version = "0.1.0"
 dependencies = [
  "bim-core",
+ "bim-export",
+ "bim-geom",
  "bim-ifc",
  "bim-report",
  "bim-rules",
@@ -22,6 +24,19 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "uuid",
+]
+
+[[package]]
+name = "bim-export"
+version = "0.1.0"
+dependencies = [
+ "bim-core",
+ "bim-geom",
+ "bim-ifc",
+ "bim-schedule",
+ "bim-takeoff",
+ "glam",
  "uuid",
 ]
 
@@ -52,10 +67,12 @@ name = "bim-report"
 version = "0.1.0"
 dependencies = [
  "bim-core",
+ "bim-export",
  "bim-geom",
  "bim-rules",
  "bim-schedule",
  "bim-takeoff",
+ "glam",
  "serde",
  "serde_json",
  "thiserror",
@@ -93,6 +110,8 @@ name = "bim-wasm"
 version = "0.1.0"
 dependencies = [
  "bim-core",
+ "bim-export",
+ "bim-geom",
  "bim-ifc",
  "bim-report",
  "serde_json",
