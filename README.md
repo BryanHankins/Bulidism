@@ -27,8 +27,8 @@ Prototype v0.7 (Phase 1 in progress). See COMPLETION_STATUS.docx for done vs ope
 Verified: wasm-pack 0.15 on Windows builds this clean and the app runs the real engine in the browser.
 Rebuild the wasm after any Rust change.
 
-Dependency versions are pinned exactly in Cargo.toml because the authoring toolchain was cargo 1.75
-(newer transitive crates require edition 2024). On a current stable toolchain you may relax the pins.
+Dependencies use caret ranges; Cargo.lock holds the tested versions (also builds on Rust 1.97). wasm-bindgen stays
+pinned exactly (=0.2.92) because it must match the wasm-bindgen-cli version CI installs.
 
 Rule parameters in rules/IN-2026.json carry per-rule provenance (`verified`). 10 rules; two parameters are checked against the ICC 2024 IBC text, the rest are secondary-source or unverified; Indiana amendments are not yet checked. Advisory only; never present as compliance.
 

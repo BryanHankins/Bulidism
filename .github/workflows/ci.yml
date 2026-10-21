@@ -9,7 +9,7 @@ jobs:
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo fmt --all -- --check
-      - run: node --test web/units.test.mjs web/print.test.mjs web/costs.test.mjs web/levels.test.mjs
+      - run: node --test web/*.test.mjs
       - run: cargo install cargo-deny --locked && cargo deny check licenses
   wasm:
     runs-on: ubuntu-latest
@@ -21,5 +21,6 @@ jobs:
       - run: cargo build -p bim-wasm --target wasm32-unknown-unknown --release
       - run: cargo install wasm-bindgen-cli --version 0.2.92 --locked
       - run: wasm-bindgen target/wasm32-unknown-unknown/release/bim_wasm.wasm --target web --out-dir web/pkg
+      - run: mkdir -p web/rules && cp rules/*.json web/rules/
       - uses: actions/upload-artifact@v4
         with: { name: web, path: web }

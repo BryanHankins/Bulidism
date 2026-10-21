@@ -3,7 +3,7 @@
     rustup target add wasm32-unknown-unknown
     cargo install wasm-pack            # or wasm-bindgen-cli at the exact version in crates/bim-wasm/Cargo.toml
     wasm-pack build crates/bim-wasm --target web --out-dir ../../web/pkg --release
-    cp rules/IN-2026.json web/rules/   # keep in sync
+    mkdir -p web/rules && cp rules/*.json web/rules/   # generated copy; rules/ is the source (git-ignored here)
     cd web && python3 -m http.server 8080   # any static server; ES modules need http://, not file://
 
 Files: index.html (shell + editor), app.js (state, editor, wasm calls), viewer.js/viewer.css (shared with
