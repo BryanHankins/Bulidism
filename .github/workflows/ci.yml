@@ -11,6 +11,25 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: node --test web/units.test.mjs web/print.test.mjs web/costs.test.mjs web/levels.test.mjs
       - run: cargo install cargo-deny --locked && cargo deny check licenses
+  server:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: bim
+          POSTGRES_PASSWORD: bim
+          POSTGRES_DB: bim_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U bim -d bim_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgres://bim:bim@localhost:5432/bim_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p bim-server --locked
   wasm:
     runs-on: ubuntu-latest
     steps:

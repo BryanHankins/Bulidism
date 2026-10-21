@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/bim-core", "crates/bim-geom", "crates/bim-schedule", "crates/bim-rules", "crates/bim-takeoff", "crates/bim-report", "crates/bim-ifc", "crates/bim-cli", "crates/bim-wasm"]
+members = ["crates/bim-core", "crates/bim-geom", "crates/bim-schedule", "crates/bim-rules", "crates/bim-takeoff", "crates/bim-report", "crates/bim-ifc", "crates/bim-cli", "crates/bim-wasm", "crates/bim-server"]
 
 [workspace.package]
 version = "0.1.0"
