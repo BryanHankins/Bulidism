@@ -13,6 +13,7 @@ Prototype v0.7 (Phase 1 in progress). See COMPLETION_STATUS.docx for done vs ope
 - crates/bim-export    no-dependency exports: store-only ZIP writer (CRC-32), XLSX takeoff workbook (sheets Takeoff + By phase), BCF 2.1 clash topics with viewpoints (components = element UUIDs in IfcGuid form). Deterministic bytes
 - crates/bim-wasm      wasm-bindgen exports: run(project_json, rules_json), validate, import_ifc, sample_project, new_project, schema_version, takeoff_xlsx, clashes_bcf (bytes)
 - crates/bim-cli       headless pipeline: validate -> schedule -> advisories -> clashes -> takeoff; --html writes a self-contained three.js 4D report; --xlsx out.xlsx, --bcf out.bcfzip
+- crates/bim-server    Axum + Postgres API: accounts, project storage, sharing (see Server below; not a dependency of anything)
 - assets/sample_office.json  exported sample project
 - assets/sample_report.html  generated 4D report (open in any browser; verified in headless Chromium)
 - web/                 live editor app: select/property panel, click-to-place walls, columns and doors (doors snap onto the wall you click), drag-to-move, undo/redo (Ctrl+Z/Y), Delete key, phase Gantt, CSV + standalone-HTML report export, JSON tab, autosave to browser storage (restored on reload), ft-in or metric display (model stays metric; web/units.js), printable code-check report (Print → save as PDF: findings, every rule checked with its verification status, spaces with occupant load, clashes, schedule/cost, sign-off block; web/print.js). levels (Edit tab: add/rename/delete, set elevation (moves the level's elements with it), active level for new elements; level picker per element and space; a Level filter in the viewer and exported report isolates one storey), unit-cost editor (Edit tab: every cost code with its usage, rate per SF/CY/LF or m²/m³/m, unpriced codes flagged, CSV import/export; web/costs.js). JS tests: `node --test web/*.test.mjs` — index.html + app.js + viewer.js/css (shared with the static report) + vendored three.js; needs web/pkg from wasm-pack (see web/README.md)
@@ -45,7 +46,19 @@ Docker image builds the wasm from source and serves it with nginx:
 - **Railway**: New Project → Deploy from repo; `railway.json` selects the Dockerfile.
 - **Own server**: `./web/build.sh` then copy `web/` behind nginx (`web/nginx.conf` has the wasm MIME type and gzip).
 
-No backend in v0 — it's a static site.
+The nginx image above is static only; for accounts and saved projects use the server below.
+
+## Server (Phase 2)
+crates/bim-server is an Axum + Postgres JSON API under `/api`: register/login/logout (argon2 passwords,
+random bearer tokens stored as sha256, 30-day sessions), `/api/me`, project CRUD (project JSON in JSONB,
+checked with `bim_core::Project::from_json`, 422 if invalid; `updated_at` on PUT gives 409 on conflict),
+and per-project sharing (owner / editor / viewer; no access is a 404). Migrations are embedded and run at startup.
+
+    docker compose up --build            # Postgres 16 + server; app and API on http://localhost:8081
+    DATABASE_URL=postgres://... cargo run -p bim-server   # env: BIND_ADDR (0.0.0.0:8081), CORS_ORIGIN, WEB_DIR
+    DATABASE_URL=postgres://... cargo test -p bim-server  # DB tests; skipped when DATABASE_URL is unset
+
+bim-server declares `rust-version = "1.83"` so the shared Cargo.lock still builds in the rust:1.83 image.
 
 ## Local build
 
