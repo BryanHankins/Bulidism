@@ -1,9 +1,23 @@
-# Render: static site built from source. Deploy with "New > Blueprint" pointed at this repo.
+# Render Blueprint (New > Blueprint, pointed at this repo): one free web service running bim-server,
+# which serves the web app at / and the API at /api, plus a free Postgres for accounts and projects.
+# Free tier: the service sleeps after idle time (first request wakes it), and free Postgres
+# databases expire, so upgrade both plans before relying on stored projects.
 services:
   - type: web
     name: buildsim
     runtime: docker
-    dockerfilePath: ./web/Dockerfile
+    plan: free
+    dockerfilePath: ./crates/bim-server/Dockerfile
     dockerContext: .
-    plan: starter
-    healthCheckPath: /index.html
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: buildsim-db
+          property: connectionString
+
+databases:
+  - name: buildsim-db
+    plan: free
+    databaseName: buildsim
+    user: buildsim

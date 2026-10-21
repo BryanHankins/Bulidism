@@ -1,6 +1,6 @@
 # API server + static web app in one image. Build from the REPO ROOT:
 #   docker build -f crates/bim-server/Dockerfile -t buildsim-server .
-# Run with DATABASE_URL set (see docker-compose.yml); listens on 8081, serves web/ at /.
+# Run with DATABASE_URL set (see docker-compose.yml); listens on $BIND_ADDR, else $PORT, else 8081; serves web/ at /.
 FROM rust:1.83-slim-bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
@@ -25,7 +25,7 @@ COPY rules/ /app/web/rules/
 COPY --from=build /out/pkg /app/web/pkg
 RUN rm -f /app/web/Dockerfile /app/web/nginx.conf /app/web/README.md /app/web/*.test.mjs \
           /app/web/build.sh /app/web/build.ps1
-ENV BIND_ADDR=0.0.0.0:8081 WEB_DIR=/app/web
+ENV WEB_DIR=/app/web
 USER bim
 EXPOSE 8081
 CMD ["bim-server"]
