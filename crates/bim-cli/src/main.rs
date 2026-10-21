@@ -10,6 +10,7 @@ const VIEWER_HTML: &str = include_str!("../viewer.html");
 const THREE_JS: &str = include_str!("../vendor/three.r128.min.js");
 const VIEWER_CSS: &str = include_str!("../../../web/viewer.css");
 const VIEWER_JS: &str = include_str!("../../../web/viewer.js");
+const CITES_JS: &str = include_str!("../../../web/cites.js");
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -187,6 +188,7 @@ fn render_html(report: &bim_report::Report) -> Result<String, String> {
         .replace('<', "\\u003c");
     Ok(VIEWER_HTML
         .replacen("/*__CSS__*/", VIEWER_CSS, 1)
+        .replacen("/*__CITES__*/", CITES_JS, 1)
         .replacen("/*__THREE__*/", THREE_JS, 1)
         .replacen("/*__VIEWER__*/", VIEWER_JS, 1)
         .replacen("/*__DATA__*/", &json, 1))

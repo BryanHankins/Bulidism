@@ -94,12 +94,12 @@ fn default_rules_follow_project_rule_set() {
         "/../../assets/sample_office.json"
     ))
     .unwrap()
-    .replace("\"IN-2026\"", "\"IBC-2024\"");
+    .replace("\"IN-2026\"", "\"XX-NONE\"");
     std::fs::write(&p, src).unwrap();
-    // no rules/IBC-2024.json ships: warn and skip, never silently apply IN-2026
+    // no rules/XX-NONE.json ships: warn and skip, never silently apply IN-2026
     let (ok, out, err) = run(&[p.to_str().unwrap()]);
     assert!(ok, "{err}");
-    assert!(err.contains("rules/IBC-2024.json"), "{err}");
+    assert!(err.contains("rules/XX-NONE.json"), "{err}");
     assert!(!out.contains("Advisories"), "{out}");
     // forcing another jurisdiction's file is allowed but flagged
     let (ok, out, err) = run(&[p.to_str().unwrap(), "--rules", "rules/IN-2026.json"]);
