@@ -1,4 +1,4 @@
-//! `bim-server`: env `DATABASE_URL` (required), `BIND_ADDR` (default 0.0.0.0:8081),
+//! `bim-server`: env `DATABASE_URL` (required), `BIND_ADDR` (else 0.0.0.0:$PORT, else 0.0.0.0:8081),
 //! `CORS_ORIGIN`, `WEB_DIR` (both optional). Applies migrations at startup.
 
 use bim_server::{connect, migrate, router, Options};
@@ -20,7 +20,10 @@ async fn main() {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let url = std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is not set")?;
-    let bind = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8081".into());
+    // PORT is what Render, Railway and similar hosts inject.
+    let bind = std::env::var("BIND_ADDR")
+        .or_else(|_| std::env::var("PORT").map(|p| format!("0.0.0.0:{p}")))
+        .unwrap_or_else(|_| "0.0.0.0:8081".into());
     let opts = Options::from_env();
     let pool = connect(&url).await?;
     migrate(&pool).await?;

@@ -42,7 +42,7 @@ Docker image builds the wasm from source and serves it with nginx:
     docker build -f web/Dockerfile -t buildsim .   # from the repo root
     docker run -p 8080:80 buildsim
 
-- **Render**: New → Blueprint, pointed at this repo (`render.yaml`).
+- **Render**: New → Blueprint, pointed at this repo (`render.yaml`): free web service running bim-server (app at /, API at /api) + free Postgres. Free services sleep when idle and free databases expire; upgrade both plans before relying on saved projects.
 - **Railway**: New Project → Deploy from repo; `railway.json` selects the Dockerfile.
 - **Own server**: `./web/build.sh` then copy `web/` behind nginx (`web/nginx.conf` has the wasm MIME type and gzip).
 
@@ -57,7 +57,7 @@ checked with `bim_core::Project::from_json`, 422 if invalid; `updated_at` on PUT
 and per-project sharing (owner / editor / viewer; no access is a 404). Migrations are embedded and run at startup.
 
     docker compose up --build            # Postgres 16 + server; app and API on http://localhost:8081
-    DATABASE_URL=postgres://... cargo run -p bim-server   # env: BIND_ADDR (0.0.0.0:8081), CORS_ORIGIN, WEB_DIR
+    DATABASE_URL=postgres://... cargo run -p bim-server   # env: BIND_ADDR (else 0.0.0.0:$PORT, else 0.0.0.0:8081), CORS_ORIGIN, WEB_DIR
     DATABASE_URL=postgres://... cargo test -p bim-server  # DB tests; skipped when DATABASE_URL is unset
 
 bim-server declares `rust-version = "1.83"` so the shared Cargo.lock still builds in the rust:1.83 image.
