@@ -5,7 +5,9 @@
 pub mod auth;
 pub mod db;
 pub mod error;
+pub mod mail;
 pub mod projects;
+pub mod ratelimit;
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::{header, HeaderValue, Method};
@@ -14,6 +16,7 @@ use axum::{Json, Router};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
@@ -26,6 +29,11 @@ pub const BODY_LIMIT: usize = 20 * 1024 * 1024;
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
+    pub limiter: Arc<ratelimit::Limiter>,
+    pub limits: ratelimit::RateLimits,
+    pub trust_proxy: bool,
+    pub mailer: Option<Arc<dyn mail::Mailer>>,
+    pub public_url: Option<String>,
 }
 
 /// Runtime options beyond the database.
@@ -35,10 +43,18 @@ pub struct Options {
     pub cors_origin: Option<String>,
     /// Serve this directory (the static web app) for non-`/api` paths.
     pub web_dir: Option<PathBuf>,
+    /// Take the client IP from `X-Forwarded-For` (only behind a proxy that sets it).
+    pub trust_proxy: bool,
+    /// Base URL of the web app, for links in emails (no trailing slash).
+    pub public_url: Option<String>,
+    /// Sends password-reset email; reset is disabled (503) without it or `public_url`.
+    pub mailer: Option<Arc<dyn mail::Mailer>>,
+    pub limits: ratelimit::RateLimits,
 }
 
 impl Options {
-    /// Reads `CORS_ORIGIN` and `WEB_DIR`; empty values count as unset.
+    /// Reads `CORS_ORIGIN`, `WEB_DIR`, `TRUST_PROXY` (1/true), `PUBLIC_URL` (else Render's
+    /// `RENDER_EXTERNAL_URL`) and `SMTP_URL` + `MAIL_FROM`; empty values count as unset.
     pub fn from_env() -> Self {
         let var = |k| {
             std::env::var(k)
@@ -48,6 +64,13 @@ impl Options {
         Options {
             cors_origin: var("CORS_ORIGIN"),
             web_dir: var("WEB_DIR").map(PathBuf::from),
+            trust_proxy: var("TRUST_PROXY")
+                .is_some_and(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes")),
+            public_url: var("PUBLIC_URL")
+                .or_else(|| var("RENDER_EXTERNAL_URL"))
+                .map(|u| u.trim().trim_end_matches('/').to_owned()),
+            mailer: mail::SmtpMailer::from_env().map(|m| Arc::new(m) as Arc<dyn mail::Mailer>),
+            limits: ratelimit::RateLimits::default(),
         }
     }
 }
@@ -68,6 +91,8 @@ pub fn router(db: PgPool, opts: &Options) -> Router {
         .route("/auth/register", post(auth::register))
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
+        .route("/auth/password-reset", post(auth::reset_request))
+        .route("/auth/password-reset/confirm", post(auth::reset_confirm))
         .route("/me", get(auth::me))
         .route("/projects", get(p::list).post(p::create))
         .route(
@@ -80,7 +105,14 @@ pub fn router(db: PgPool, opts: &Options) -> Router {
         )
         .route("/projects/{id}/shares/{email}", delete(p::delete_share))
         .fallback(api_not_found)
-        .with_state(AppState { db });
+        .with_state(AppState {
+            db,
+            limiter: Arc::default(),
+            limits: opts.limits,
+            trust_proxy: opts.trust_proxy,
+            mailer: opts.mailer.clone(),
+            public_url: opts.public_url.clone(),
+        });
 
     let mut app = Router::new().nest("/api", api);
     if let Some(dir) = &opts.web_dir {

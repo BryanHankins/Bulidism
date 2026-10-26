@@ -1,7 +1,7 @@
 # API server + static web app in one image. Build from the REPO ROOT:
 #   docker build -f crates/bim-server/Dockerfile -t buildsim-server .
 # Run with DATABASE_URL set (see docker-compose.yml); listens on $BIND_ADDR, else $PORT, else 8081; serves web/ at /.
-FROM rust:1.83-slim-bookworm AS build
+FROM rust:1.90-slim-bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && rustup target add wasm32-unknown-unknown \

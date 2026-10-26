@@ -15,6 +15,17 @@ services:
         fromDatabase:
           name: buildsim-db
           property: connectionString
+      # Render's proxy appends the client IP to X-Forwarded-For; the auth rate limits key on it
+      - key: TRUST_PROXY
+        value: "true"
+      # Password reset email. Set both in the dashboard (any provider's SMTP endpoint), e.g.
+      #   SMTP_URL  smtps://USER:PASSWORD@smtp.resend.com:465
+      #   MAIL_FROM buildsim <no-reply@yourdomain.com>
+      # Links point at RENDER_EXTERNAL_URL unless PUBLIC_URL is set. Without these, reset is off.
+      - key: SMTP_URL
+        sync: false
+      - key: MAIL_FROM
+        sync: false
 
 databases:
   - name: buildsim-db

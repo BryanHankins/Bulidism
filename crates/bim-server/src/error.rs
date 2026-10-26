@@ -2,7 +2,7 @@
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{FromRequest, Request};
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::de::DeserializeOwned;
@@ -22,6 +22,10 @@ pub enum ApiError {
     Conflict(&'static str),
     /// 422: project data failed `bim_core::Project` validation.
     Unprocessable(String),
+    /// 429: rate limited; seconds until the caller may retry (sent as `Retry-After`).
+    TooManyRequests(u64),
+    /// 503: a feature this deployment has not configured (e.g. email for password reset).
+    Unavailable(&'static str),
     /// Body rejected by the JSON extractor (status taken from the rejection).
     Body(StatusCode, String),
     /// 500: logged, never echoed to the client.
@@ -43,6 +47,16 @@ impl IntoResponse for ApiError {
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, m.into()),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m.into()),
             ApiError::Unprocessable(m) => (StatusCode::UNPROCESSABLE_ENTITY, m),
+            ApiError::TooManyRequests(secs) => {
+                let body = Json(json!({ "error": "too many attempts; try again later" }));
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    [(header::RETRY_AFTER, secs.to_string())],
+                    body,
+                )
+                    .into_response();
+            }
+            ApiError::Unavailable(m) => (StatusCode::SERVICE_UNAVAILABLE, m.into()),
             ApiError::Body(s, m) => (s, m),
             ApiError::Internal(m) => {
                 tracing::error!("{m}");
