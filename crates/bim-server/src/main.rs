@@ -1,5 +1,6 @@
 //! `bim-server`: env `DATABASE_URL` (required), `BIND_ADDR` (else 0.0.0.0:$PORT, else 0.0.0.0:8081),
-//! `CORS_ORIGIN`, `WEB_DIR` (both optional). Applies migrations at startup.
+//! `CORS_ORIGIN`, `WEB_DIR`, `TRUST_PROXY`, `PUBLIC_URL`, `SMTP_URL` + `MAIL_FROM` (all optional; see
+//! `Options::from_env`). Applies migrations at startup.
 
 use bim_server::{connect, migrate, router, Options};
 use tracing_subscriber::EnvFilter;
@@ -30,10 +31,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app = router(pool, &opts);
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!(
-        "listening on {bind} (cors: {:?}, web: {:?})",
+        "listening on {bind} (cors: {:?}, web: {:?}, trust proxy: {}, password reset: {})",
         opts.cors_origin,
-        opts.web_dir
+        opts.web_dir,
+        opts.trust_proxy,
+        if opts.mailer.is_some() && opts.public_url.is_some() {
+            "on"
+        } else {
+            "off"
+        }
     );
+    // ConnectInfo gives the rate limiter the peer address when there is no trusted proxy
+    let app = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown())
         .await?;

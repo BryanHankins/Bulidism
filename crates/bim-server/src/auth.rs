@@ -1,6 +1,8 @@
-//! Accounts and bearer-token sessions: argon2 passwords, sha256-hashed random tokens.
+//! Accounts and bearer-token sessions: argon2 passwords, sha256-hashed random tokens, rate-limited
+//! login/register, and emailed single-use password-reset links.
 
 use crate::error::{ApiError, ApiJson};
+use crate::ratelimit::ClientIp;
 use crate::AppState;
 use argon2::password_hash::{rand_core::OsRng, PasswordHash, SaltString};
 use argon2::{Argon2, PasswordHasher, PasswordVerifier};
@@ -15,6 +17,8 @@ use uuid::Uuid;
 
 /// Session lifetime.
 pub const SESSION_DAYS: i64 = 30;
+/// Password-reset link lifetime.
+pub const RESET_MINUTES: i32 = 60;
 const MIN_PASSWORD: usize = 8;
 /// Upper bound keeps argon2 work per request bounded.
 const MAX_PASSWORD: usize = 1024;
@@ -99,11 +103,30 @@ impl FromRequestParts<AppState> for AuthUser {
     }
 }
 
-/// Creates a session for `user_id` and returns the plaintext token (shown once).
-async fn new_session(state: &AppState, user_id: Uuid) -> Result<String, ApiError> {
+/// 32 random bytes, hex-encoded.
+fn random_token() -> String {
     let mut bytes = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut bytes);
-    let token = hex::encode(bytes);
+    hex::encode(bytes)
+}
+
+/// Rejects passwords outside `MIN_PASSWORD..=MAX_PASSWORD` characters.
+fn check_password(password: &str) -> Result<(), ApiError> {
+    let n = password.chars().count();
+    if n < MIN_PASSWORD {
+        return Err(ApiError::BadRequest(format!(
+            "password must be at least {MIN_PASSWORD} characters"
+        )));
+    }
+    if n > MAX_PASSWORD {
+        return Err(ApiError::BadRequest("password too long".into()));
+    }
+    Ok(())
+}
+
+/// Creates a session for `user_id` and returns the plaintext token (shown once).
+async fn new_session(state: &AppState, user_id: Uuid) -> Result<String, ApiError> {
+    let token = random_token();
     sqlx::query(
         "INSERT INTO sessions (token_hash, user_id, expires_at)
          VALUES ($1, $2, now() + make_interval(days => $3))",
@@ -143,18 +166,14 @@ async fn verify_password(password: String, hash: String) -> Result<bool, ApiErro
 /// `POST /api/auth/register` -> 201 `{user, token}`; 409 if the email is taken.
 pub async fn register(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     ApiJson(c): ApiJson<Credentials>,
 ) -> Result<(StatusCode, Json<AuthResponse>), ApiError> {
+    state
+        .limiter
+        .hit("register_ip", &ip, state.limits.register_ip)?;
     let email = normalize_email(&c.email)?;
-    let n = c.password.chars().count();
-    if n < MIN_PASSWORD {
-        return Err(ApiError::BadRequest(format!(
-            "password must be at least {MIN_PASSWORD} characters"
-        )));
-    }
-    if n > MAX_PASSWORD {
-        return Err(ApiError::BadRequest("password too long".into()));
-    }
+    check_password(&c.password)?;
     let hash = hash_password(c.password).await?;
     let id = Uuid::new_v4();
     let inserted = sqlx::query(
@@ -179,17 +198,30 @@ pub async fn register(
     ))
 }
 
-/// `POST /api/auth/login` -> `{user, token}`; 401 on bad credentials.
+/// `POST /api/auth/login` -> `{user, token}`; 401 on bad credentials, 429 when rate limited.
 pub async fn login(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     ApiJson(c): ApiJson<Credentials>,
 ) -> Result<Json<AuthResponse>, ApiError> {
     const BAD: ApiError = ApiError::Unauthorized("invalid email or password");
+    let lim = state.limits;
+    state.limiter.hit("login_ip", &ip, lim.login_ip)?;
     let Ok(email) = normalize_email(&c.email) else {
         return Err(BAD);
     };
+    state
+        .limiter
+        .check("login_email", &email, lim.login_email_failures)?;
+    let fail = || {
+        // only failures count per email, so the real owner can still sign in
+        let _ = state
+            .limiter
+            .hit("login_email", &email, lim.login_email_failures);
+        BAD
+    };
     if c.password.chars().count() > MAX_PASSWORD {
-        return Err(BAD);
+        return Err(fail());
     }
     let row: Option<(Uuid, String)> =
         sqlx::query_as("SELECT id, password_hash FROM users WHERE email = $1")
@@ -197,10 +229,10 @@ pub async fn login(
             .fetch_optional(&state.db)
             .await?;
     let Some((id, hash)) = row else {
-        return Err(BAD);
+        return Err(fail());
     };
     if !verify_password(c.password, hash).await? {
-        return Err(BAD);
+        return Err(fail());
     }
     // Opportunistic cleanup keeps the sessions table from growing without bound.
     sqlx::query("DELETE FROM sessions WHERE expires_at <= now()")
@@ -219,6 +251,112 @@ pub async fn logout(State(state): State<AppState>, auth: AuthUser) -> Result<Sta
         .bind(&auth.token_hash)
         .execute(&state.db)
         .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct ResetRequest {
+    email: String,
+}
+
+#[derive(Deserialize)]
+pub struct ResetConfirm {
+    token: String,
+    password: String,
+}
+
+/// `POST /api/auth/password-reset {email}` -> 202 whether or not the account exists (no
+/// enumeration); if it does, mails a single-use link `<PUBLIC_URL>/#reset=<token>` valid for
+/// `RESET_MINUTES`. 503 when email is not configured, 429 when rate limited.
+pub async fn reset_request(
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    ApiJson(r): ApiJson<ResetRequest>,
+) -> Result<StatusCode, ApiError> {
+    const OFF: ApiError = ApiError::Unavailable("password reset is not configured on this server");
+    let (Some(mailer), Some(base)) = (state.mailer.clone(), state.public_url.clone()) else {
+        return Err(OFF);
+    };
+    state.limiter.hit("reset_ip", &ip, state.limits.reset_ip)?;
+    let email = normalize_email(&r.email)?;
+    // per address, so nobody can flood an inbox; applies to unknown addresses too
+    state
+        .limiter
+        .hit("reset_email", &email, state.limits.reset_email)?;
+    sqlx::query("DELETE FROM password_resets WHERE expires_at <= now()")
+        .execute(&state.db)
+        .await?;
+    let user: Option<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE email = $1")
+        .bind(&email)
+        .fetch_optional(&state.db)
+        .await?;
+    if let Some(user_id) = user {
+        let token = random_token();
+        sqlx::query(
+            "INSERT INTO password_resets (token_hash, user_id, expires_at)
+             VALUES ($1, $2, now() + make_interval(mins => $3))",
+        )
+        .bind(hash_token(&token))
+        .bind(user_id)
+        .bind(RESET_MINUTES)
+        .execute(&state.db)
+        .await?;
+        let body = format!(
+            "Someone asked to reset the password for your buildsim account ({email}).\n\n\
+             Choose a new password here (the link works once, for {RESET_MINUTES} minutes):\n\
+             {base}/#reset={token}\n\n\
+             If this wasn't you, ignore this email; your password is unchanged."
+        );
+        // sent in the background: the response must not wait on (or reveal) SMTP
+        tokio::spawn(async move {
+            if let Err(e) = mailer
+                .send(&email, "Reset your buildsim password", &body)
+                .await
+            {
+                tracing::error!("password-reset email failed: {e}");
+            }
+        });
+    }
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// `POST /api/auth/password-reset/confirm {token, password}` -> 204. Uses up the token, sets the
+/// password and signs the account out everywhere; 400 for an unknown, used or expired token.
+pub async fn reset_confirm(
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    ApiJson(r): ApiJson<ResetConfirm>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .limiter
+        .hit("reset_confirm_ip", &ip, state.limits.reset_confirm_ip)?;
+    check_password(&r.password)?;
+    let hash = hash_password(r.password).await?;
+    let mut tx = state.db.begin().await?;
+    let user: Option<Uuid> = sqlx::query_scalar(
+        "DELETE FROM password_resets WHERE token_hash = $1 AND expires_at > now()
+         RETURNING user_id",
+    )
+    .bind(hash_token(r.token.trim()))
+    .fetch_optional(&mut *tx)
+    .await?;
+    let user = user.ok_or(ApiError::BadRequest(
+        "this reset link is invalid or has expired".into(),
+    ))?;
+    sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+        .bind(&hash)
+        .bind(user)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM password_resets WHERE user_id = $1")
+        .bind(user)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+        .bind(user)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

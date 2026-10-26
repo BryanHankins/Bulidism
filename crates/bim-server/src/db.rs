@@ -4,7 +4,10 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Connection;
 
 /// Ordered migrations; a version is applied once and recorded in `schema_migrations`.
-const MIGRATIONS: &[(i32, &str)] = &[(1, include_str!("../migrations/0001_init.sql"))];
+const MIGRATIONS: &[(i32, &str)] = &[
+    (1, include_str!("../migrations/0001_init.sql")),
+    (2, include_str!("../migrations/0002_password_resets.sql")),
+];
 
 /// Arbitrary key for the advisory lock that serialises concurrent migrators.
 const LOCK_KEY: i64 = 0x0062_696d_5f73_7276;

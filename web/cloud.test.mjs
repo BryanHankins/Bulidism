@@ -1,7 +1,7 @@
 // node --test web/cloud.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createCloud, CloudError, TOKEN_KEY } from './cloud.js';
+import { createCloud, CloudError, TOKEN_KEY, resetTokenFromHash } from './cloud.js';
 
 // stub fetch: routes "METHOD /path" -> [status, body]; records every call
 function stub(routes) {
@@ -10,8 +10,8 @@ function stub(routes) {
     calls.push({ url, method: init.method, headers: init.headers, body: init.body === undefined ? undefined : JSON.parse(init.body) });
     const key = `${init.method} ${url}`, r = routes[key];
     if (!r) return { ok: false, status: 404, text: async () => '' };
-    const [status, body] = typeof r === 'function' ? r(init) : r;
-    return { ok: status >= 200 && status < 300, status, text: async () => body === undefined ? '' : JSON.stringify(body) };
+    const [status, body, hdrs = {}] = typeof r === 'function' ? r(init) : r;
+    return { ok: status >= 200 && status < 300, status, headers: { get: k => hdrs[k] ?? null }, text: async () => body === undefined ? '' : JSON.stringify(body) };
   };
   return { fetch, calls };
 }
@@ -85,4 +85,38 @@ test('health is false when the API is absent or unreachable; storage errors are 
   // non-JSON error bodies surface as the message
   const t = createCloud({ base: '/api', storage: null, fetch: async () => ({ ok: false, status: 500, text: async () => 'boom' }) });
   await assert.rejects(t.list(), e => e.status === 500 && e.message === 'boom');
+});
+
+test('password reset: request and confirm paths; confirm drops any local token', async () => {
+  const { fetch, calls } = stub({
+    'POST /api/auth/login': [200, { user: { id: 'u1', email: 'a@b.c' }, token: 'T1' }],
+    'POST /api/auth/password-reset': [202],
+    'POST /api/auth/password-reset/confirm': [204],
+  });
+  const storage = memStore(), c = createCloud({ base: '/api', fetch, storage });
+  await c.login('a@b.c', 'pw');
+  await c.requestReset('a@b.c');
+  assert.deepEqual(calls[1].body, { email: 'a@b.c' });
+  await c.confirmReset('ab'.repeat(32), 'new password');
+  assert.deepEqual(calls[2].body, { token: 'ab'.repeat(32), password: 'new password' });
+  assert.equal(c.signedIn, false);
+  assert.equal(storage.getItem(TOKEN_KEY), null);
+});
+
+test('429 carries Retry-After seconds; 503 and 400 surface the server message', async () => {
+  const { fetch } = stub({
+    'POST /api/auth/login': [429, { error: 'too many attempts; try again later' }, { 'Retry-After': '120' }],
+    'POST /api/auth/password-reset': [503, { error: 'password reset is not configured on this server' }],
+    'POST /api/auth/password-reset/confirm': [400, { error: 'this reset link is invalid or has expired' }],
+  });
+  const c = createCloud({ base: '/api', fetch, storage: null });
+  await assert.rejects(c.login('a@b.c', 'pw'), e => e instanceof CloudError && e.rateLimited && e.retryAfter === 120);
+  await assert.rejects(c.requestReset('a@b.c'), e => e.status === 503 && /not configured/.test(e.message));
+  await assert.rejects(c.confirmReset('ab'.repeat(32), 'new password'), e => e.status === 400 && !e.rateLimited && e.retryAfter === null);
+});
+
+test('reset token is read only from a well-formed #reset= hash', () => {
+  const t = '0123456789abcdef'.repeat(4);
+  assert.equal(resetTokenFromHash('#reset=' + t), t);
+  for (const bad of ['', '#', '#reset=', '#reset=xyz', '#reset=' + t + '&x=1', '#other=' + t, '#reset=<script>']) assert.equal(resetTokenFromHash(bad), null, bad);
 });

@@ -4,20 +4,27 @@
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use axum::Router;
+use bim_server::mail::{Mailer, SendFuture};
+use bim_server::ratelimit::{Limit, RateLimits};
 use bim_server::{auth::hash_token, connect, migrate, router, Options};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use sqlx::PgPool;
+use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
 async fn setup() -> Option<(Router, PgPool)> {
+    setup_with(Options::default()).await
+}
+
+async fn setup_with(opts: Options) -> Option<(Router, PgPool)> {
     let Ok(url) = std::env::var("DATABASE_URL") else {
         eprintln!("DATABASE_URL not set; skipping bim-server DB test");
         return None;
     };
     let pool = connect(&url).await.expect("connect");
     migrate(&pool).await.expect("migrate");
-    Some((router(pool.clone(), &Options::default()), pool))
+    Some((router(pool.clone(), &opts), pool))
 }
 
 async fn call(
@@ -27,7 +34,22 @@ async fn call(
     token: Option<&str>,
     body: Option<Value>,
 ) -> (StatusCode, Value) {
+    call_with(app, method, uri, token, body, &[]).await.0
+}
+
+/// `call` with extra request headers; also returns the response's Retry-After, if any.
+async fn call_with(
+    app: &Router,
+    method: Method,
+    uri: &str,
+    token: Option<&str>,
+    body: Option<Value>,
+    headers: &[(&str, &str)],
+) -> ((StatusCode, Value), Option<String>) {
     let mut req = Request::builder().method(method).uri(uri);
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
     if let Some(t) = token {
         req = req.header(header::AUTHORIZATION, format!("Bearer {t}"));
     }
@@ -40,6 +62,10 @@ async fn call(
     .unwrap();
     let res = app.clone().oneshot(req).await.unwrap();
     let status = res.status();
+    let retry = res
+        .headers()
+        .get(header::RETRY_AFTER)
+        .map(|v| v.to_str().unwrap().to_string());
     let bytes = res.into_body().collect().await.unwrap().to_bytes();
     let v = if bytes.is_empty() {
         Value::Null
@@ -47,7 +73,7 @@ async fn call(
         serde_json::from_slice(&bytes)
             .unwrap_or_else(|_| panic!("non-JSON body: {}", String::from_utf8_lossy(&bytes)))
     };
-    (status, v)
+    ((status, v), retry)
 }
 
 fn email() -> String {
@@ -533,4 +559,368 @@ async fn oversized_body_is_413() {
     .await;
     assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE);
     assert!(v["error"].is_string());
+}
+
+/// Records outgoing mail instead of sending it.
+#[derive(Debug, Default)]
+struct Outbox(Mutex<Vec<(String, String)>>);
+
+impl Mailer for Outbox {
+    fn send<'a>(&'a self, to: &'a str, _subject: &'a str, body: &'a str) -> SendFuture<'a> {
+        self.0.lock().unwrap().push((to.into(), body.into()));
+        Box::pin(async { Ok(()) })
+    }
+}
+
+fn reset_opts(outbox: &Arc<Outbox>) -> Options {
+    Options {
+        mailer: Some(outbox.clone() as Arc<dyn Mailer>),
+        public_url: Some("https://app.example".into()),
+        ..Options::default()
+    }
+}
+
+/// Waits for the background send, then returns the token from the mailed link to `to`.
+async fn mailed_token(outbox: &Outbox, to: &str) -> String {
+    for _ in 0..100 {
+        let link = outbox
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(t, _)| t == to)
+            .map(|(_, b)| {
+                let at = b.find("https://app.example/#reset=").expect("link in body");
+                b[at + "https://app.example/#reset=".len()..]
+                    .split_whitespace()
+                    .next()
+                    .unwrap()
+                    .to_string()
+            });
+        if let Some(t) = link {
+            return t;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("no reset email to {to}");
+}
+
+async fn login(app: &Router, email: &str, password: &str) -> StatusCode {
+    call(
+        app,
+        Method::POST,
+        "/api/auth/login",
+        None,
+        Some(json!({"email": email, "password": password})),
+    )
+    .await
+    .0
+}
+
+#[tokio::test]
+async fn password_reset_flow() {
+    let outbox = Arc::new(Outbox::default());
+    let Some((app, pool)) = setup_with(reset_opts(&outbox)).await else {
+        return;
+    };
+    let (e, old_session) = user(&app).await;
+    let (s, _) = call(
+        &app,
+        Method::POST,
+        "/api/auth/password-reset",
+        None,
+        Some(json!({"email": e.to_uppercase()})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let token = mailed_token(&outbox, &e).await;
+    // only the hash is stored
+    let stored: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM password_resets WHERE token_hash = $1")
+            .bind(hash_token(&token))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, 1);
+
+    let confirm = |t: &str, p: &str| {
+        let body = json!({"token": t, "password": p});
+        let app = app.clone();
+        async move {
+            call(
+                &app,
+                Method::POST,
+                "/api/auth/password-reset/confirm",
+                None,
+                Some(body),
+            )
+            .await
+        }
+    };
+    let (s, v) = confirm(&token, "short").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    let (s, v) = confirm(&token, "brand new pass").await;
+    assert_eq!(s, StatusCode::NO_CONTENT, "{v}");
+    // single use
+    let (s, v) = confirm(&token, "another new pass").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert!(v["error"]
+        .as_str()
+        .unwrap()
+        .contains("invalid or has expired"));
+    // signed out everywhere; old password gone, new one works
+    let (s, _) = call(&app, Method::GET, "/api/me", Some(&old_session), None).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        login(&app, &e, "correct horse").await,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(login(&app, &e, "brand new pass").await, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn password_reset_edge_cases() {
+    let outbox = Arc::new(Outbox::default());
+    let Some((app, pool)) = setup_with(reset_opts(&outbox)).await else {
+        return;
+    };
+    // unknown account: same 202, nothing sent
+    let ghost = email();
+    let (s, _) = call(
+        &app,
+        Method::POST,
+        "/api/auth/password-reset",
+        None,
+        Some(json!({"email": ghost})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(outbox.0.lock().unwrap().iter().all(|(t, _)| *t != ghost));
+    // invalid email shape
+    let (s, _) = call(
+        &app,
+        Method::POST,
+        "/api/auth/password-reset",
+        None,
+        Some(json!({"email": "nope"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    // expired link
+    let (e, _) = user(&app).await;
+    let (s, _) = call(
+        &app,
+        Method::POST,
+        "/api/auth/password-reset",
+        None,
+        Some(json!({"email": e})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let token = mailed_token(&outbox, &e).await;
+    sqlx::query(
+        "UPDATE password_resets SET expires_at = now() - interval '1 second' WHERE token_hash = $1",
+    )
+    .bind(hash_token(&token))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (s, _) = call(
+        &app,
+        Method::POST,
+        "/api/auth/password-reset/confirm",
+        None,
+        Some(json!({"token": token, "password": "brand new pass"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert_eq!(login(&app, &e, "correct horse").await, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn password_reset_unconfigured_is_503() {
+    let Some((app, _)) = setup().await else {
+        return;
+    };
+    let (s, v) = call(
+        &app,
+        Method::POST,
+        "/api/auth/password-reset",
+        None,
+        Some(json!({"email": email()})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(v["error"].is_string());
+}
+
+fn tight_limits() -> RateLimits {
+    RateLimits {
+        login_ip: Limit::per(4, 60),
+        login_email_failures: Limit::per(2, 60),
+        register_ip: Limit::per(3, 60),
+        reset_ip: Limit::per(5, 60),
+        reset_email: Limit::per(1, 60),
+        reset_confirm_ip: Limit::per(2, 60),
+    }
+}
+
+#[tokio::test]
+async fn login_rate_limits() {
+    let Some((app, _)) = setup_with(Options {
+        limits: tight_limits(),
+        ..Options::default()
+    })
+    .await
+    else {
+        return;
+    };
+    let (e, _) = user(&app).await;
+    // failures per email: 2 allowed, then 429 even with the right password
+    assert_eq!(
+        login(&app, &e, "wrong pass 1").await,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        login(&app, &e, "wrong pass 2").await,
+        StatusCode::UNAUTHORIZED
+    );
+    let ((s, v), retry) = call_with(
+        &app,
+        Method::POST,
+        "/api/auth/login",
+        None,
+        Some(json!({"email": e, "password": "correct horse"})),
+        &[],
+    )
+    .await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    assert!(v["error"].is_string());
+    assert!(retry.unwrap().parse::<u64>().unwrap() >= 1);
+    // per IP: 4 attempts per window in total, whatever the email (3 used above)
+    for expect in [StatusCode::UNAUTHORIZED, StatusCode::TOO_MANY_REQUESTS] {
+        let (s, _) = call(
+            &app,
+            Method::POST,
+            "/api/auth/login",
+            None,
+            Some(json!({"email": email(), "password": "x"})),
+        )
+        .await;
+        assert_eq!(s, expect);
+    }
+}
+
+#[tokio::test]
+async fn register_and_reset_rate_limits() {
+    let outbox = Arc::new(Outbox::default());
+    let opts = Options {
+        limits: tight_limits(),
+        ..reset_opts(&outbox)
+    };
+    let Some((app, _)) = setup_with(opts).await else {
+        return;
+    };
+    let (e, _) = user(&app).await;
+    user(&app).await;
+    user(&app).await;
+    let (s, _) = call(
+        &app,
+        Method::POST,
+        "/api/auth/register",
+        None,
+        Some(json!({"email": email(), "password": "correct horse"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    // one reset email per address per window
+    let req = || json!({"email": e});
+    let (s, _) = call(
+        &app,
+        Method::POST,
+        "/api/auth/password-reset",
+        None,
+        Some(req()),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let (s, _) = call(
+        &app,
+        Method::POST,
+        "/api/auth/password-reset",
+        None,
+        Some(req()),
+    )
+    .await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    // confirm attempts per IP
+    for expect in [
+        StatusCode::BAD_REQUEST,
+        StatusCode::BAD_REQUEST,
+        StatusCode::TOO_MANY_REQUESTS,
+    ] {
+        let (s, _) = call(
+            &app,
+            Method::POST,
+            "/api/auth/password-reset/confirm",
+            None,
+            Some(json!({"token": "guess", "password": "brand new pass"})),
+        )
+        .await;
+        assert_eq!(s, expect);
+    }
+}
+
+#[tokio::test]
+async fn client_ip_from_forwarded_for_only_when_trusted() {
+    let limits = RateLimits {
+        register_ip: Limit::per(1, 60),
+        ..tight_limits()
+    };
+    let register = |app: Router, xff: &'static str| async move {
+        call_with(
+            &app,
+            Method::POST,
+            "/api/auth/register",
+            None,
+            Some(json!({"email": email(), "password": "correct horse"})),
+            &[("x-forwarded-for", xff)],
+        )
+        .await
+        .0
+         .0
+    };
+    // trusted: the rightmost (proxy-appended) address is the key; a spoofed left part is ignored
+    let Some((app, _)) = setup_with(Options {
+        limits,
+        trust_proxy: true,
+        ..Options::default()
+    })
+    .await
+    else {
+        return;
+    };
+    assert_eq!(
+        register(app.clone(), "6.6.6.6, 1.1.1.1").await,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        register(app.clone(), "7.7.7.7, 1.1.1.1").await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(register(app.clone(), "2.2.2.2").await, StatusCode::CREATED);
+    // untrusted: the header is ignored, so changing it does not dodge the limit
+    let (app, _) = setup_with(Options {
+        limits,
+        ..Options::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(register(app.clone(), "1.1.1.1").await, StatusCode::CREATED);
+    assert_eq!(
+        register(app.clone(), "2.2.2.2").await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
 }

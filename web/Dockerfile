@@ -1,7 +1,7 @@
 # Static hosting for the buildsim web app (Railway, Render, Fly, or any Docker host).
 # Build from the REPO ROOT so the wasm is compiled from source:
 #   docker build -f web/Dockerfile -t buildsim .
-FROM rust:1.83-slim AS wasm
+FROM rust:1.90-slim-bookworm AS wasm
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && rustup target add wasm32-unknown-unknown \

@@ -5,11 +5,18 @@
 export const TOKEN_KEY = 'buildsim.cloud.token';
 
 export class CloudError extends Error {
-  constructor(status, body) {
+  constructor(status, body, retryAfter = null) {
     super((body && (body.error || body.message)) || `HTTP ${status}`);
-    this.status = status; this.body = body;
+    this.status = status; this.body = body; this.retryAfter = retryAfter; // seconds, on 429
   }
   get conflict() { return this.status === 409; }
+  get rateLimited() { return this.status === 429; }
+}
+
+/** The token from an emailed reset link (`#reset=<token>`), or null. */
+export function resetTokenFromHash(hash) {
+  const m = /^#reset=([0-9a-f]{16,128})$/i.exec(String(hash || '').trim());
+  return m ? m[1] : null;
 }
 
 // localStorage can be missing or throw (private mode, blocked storage): never let that break the app
@@ -33,7 +40,11 @@ export function createCloud({ base, fetch: f, storage } = {}) {
     const r = await doFetch(root + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
     const text = await r.text();
     let data = null; if (text) { try { data = JSON.parse(text); } catch (_) { data = { error: text }; } }
-    if (!r.ok) { if (r.status === 401) setToken(null); throw new CloudError(r.status, data); }
+    if (!r.ok) {
+      if (r.status === 401) setToken(null);
+      const ra = r.headers && typeof r.headers.get === 'function' ? parseInt(r.headers.get('Retry-After'), 10) : NaN;
+      throw new CloudError(r.status, data, Number.isFinite(ra) ? ra : null);
+    }
     return data;
   }
   async function auth(path, email, password) {
@@ -48,6 +59,10 @@ export function createCloud({ base, fetch: f, storage } = {}) {
     async health() { try { await req('GET', '/health'); return true; } catch (_) { return false; } },
     register: (email, password) => auth('/auth/register', email, password),
     login: (email, password) => auth('/auth/login', email, password),
+    /** Emails a reset link if the account exists (same answer either way); 503 when the server has no email set up */
+    requestReset: email => req('POST', '/auth/password-reset', { email }),
+    /** Sets a new password from a reset-link token; signs the account out everywhere */
+    async confirmReset(token, password) { await req('POST', '/auth/password-reset/confirm', { token, password }); setToken(null); },
     async logout() { try { await req('POST', '/auth/logout'); } catch (_) { /* token dropped regardless */ } setToken(null); },
     me: () => req('GET', '/me'),
     list: () => req('GET', '/projects'),

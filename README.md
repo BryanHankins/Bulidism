@@ -56,11 +56,20 @@ random bearer tokens stored as sha256, 30-day sessions), `/api/me`, project CRUD
 checked with `bim_core::Project::from_json`, 422 if invalid; `updated_at` on PUT gives 409 on conflict),
 and per-project sharing (owner / editor / viewer; no access is a 404). Migrations are embedded and run at startup.
 
+- Rate limits (in-process, per instance; 429 + Retry-After): login 20 per 5 min per IP and 10 failed attempts per
+  15 min per account; register 10 per hour per IP; reset requests 10 per hour per IP and 3 per hour per address.
+  Set `TRUST_PROXY=true` behind a proxy that appends `X-Forwarded-For` (render.yaml does).
+- Password reset: `POST /api/auth/password-reset {email}` always answers 202 and, if the account exists, emails
+  a single-use link `<PUBLIC_URL>/#reset=<token>` (60 minutes; only its sha256 is stored). `POST
+  /api/auth/password-reset/confirm {token, password}` sets the password and signs the account out everywhere.
+  Email goes over SMTP (`SMTP_URL` + `MAIL_FROM`, any provider); without them reset answers 503. The Cloud tab
+  has "Forgot password?" and opens the link's set-new-password form.
+
     docker compose up --build            # Postgres 16 + server; app and API on http://localhost:8081
-    DATABASE_URL=postgres://... cargo run -p bim-server   # env: BIND_ADDR (else 0.0.0.0:$PORT, else 0.0.0.0:8081), CORS_ORIGIN, WEB_DIR
+    DATABASE_URL=postgres://... cargo run -p bim-server   # env: BIND_ADDR (else 0.0.0.0:$PORT, else 0.0.0.0:8081), CORS_ORIGIN, WEB_DIR, TRUST_PROXY, PUBLIC_URL (else RENDER_EXTERNAL_URL), SMTP_URL, MAIL_FROM
     DATABASE_URL=postgres://... cargo test -p bim-server  # DB tests; skipped when DATABASE_URL is unset
 
-bim-server declares `rust-version = "1.83"` so the shared Cargo.lock still builds in the rust:1.83 image.
+The Docker images build with Rust 1.90 (`rust-version` in crates/bim-server/Cargo.toml); CI uses current stable.
 
 ## Local build
 

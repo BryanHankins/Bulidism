@@ -5,7 +5,7 @@ import { setLevelElevation } from './levels.js';
 import { costRows, perLabel, rateOut, rateIn, parseDollars, ratesToCsv, parseRatesCsv } from './costs.js';
 import { snapStep, lenToInput, parseLen, fmtArea, areaToInput, parseArea, qtyOut, convertMessage } from './units.js';
 import { kindOf, clickSelect, deleteElements, moveElements, copyElements, pasteElements, rectBounds, commonValue, dependsCycle } from './clipboard.js';
-import { createCloud } from './cloud.js';
+import { createCloud, resetTokenFromHash } from './cloud.js';
 
 const $ = id => document.getElementById(id);
 // user-supplied strings (names, cost codes) go into innerHTML: always escape
@@ -499,6 +499,18 @@ document.querySelectorAll('.tabs .btn').forEach(b => b.onclick = () => selectTab
 // ---- cloud projects (only when an API answers /api/health; static hosting never shows this) ----
 const cloud = createCloud();
 let cloudOn = false, cloudUser = null, cloudList = null, cloudShares = null, cloudConflict = false, cloudMsg = '';
+// signed-out views: 'auth' (sign in / create), 'forgot' (request a reset email), 'reset' (new password from the emailed link)
+let cloudView = 'auth', cloudInfo = '';
+let resetToken = null;
+// reads an emailed `#reset=<token>` link (on load, or pasted into an already-open tab) and keeps the
+// one-time token out of the address bar, history and bookmarks
+function takeResetLink() {
+  const t = resetTokenFromHash(location.hash); if (!t) return false;
+  try { history.replaceState(null, '', location.pathname + location.search); } catch (_) { /* file:// etc. */ }
+  resetToken = t; cloudView = 'reset'; cloudMsg = cloudInfo = ''; return true;
+}
+takeResetLink();
+addEventListener('hashchange', () => { if (takeResetLink() && cloudOn) { cloudUser = null; selectTab('cloud'); renderCloud(); } });
 const CLOUD_LINK_KEY = 'buildsim.cloud.link';
 // the cloud project the open model was loaded from / saved to: {id, name, role, updated_at}
 let cloudLink = (() => { try { return JSON.parse(store.get(CLOUD_LINK_KEY)) || null; } catch (_) { return null; } })();
@@ -506,14 +518,20 @@ function setCloudLink(l) { cloudLink = l; cloudConflict = false; cloudShares = n
 async function initCloud() {
   if (!(await cloud.health())) return; // no API: keep the tab hidden
   cloudOn = true; document.querySelector('.tabs [data-tab="cloud"]').hidden = false;
+  if (resetToken) { selectTab('cloud'); renderCloud(); return; }
   if (cloud.signedIn) { try { const u = await cloud.me(); cloudUser = u.user || u; await refreshCloud(); } catch (_) { cloudUser = null; } }
   renderCloud();
 }
 async function cloudDo(fn, ok) {
-  cloudMsg = '';
+  cloudMsg = ''; cloudInfo = '';
   try { await fn(); if (ok && !cloudConflict) cloudMsg = ok; }
-  catch (e) { if (e.status === 401) cloudUser = null; cloudMsg = String(e.message || e); }
+  catch (e) { if (e.status === 401) cloudUser = null; cloudMsg = cloudErrorText(e); }
   renderCloud();
+}
+function cloudErrorText(e) {
+  if (e.rateLimited) { const m = Math.max(1, Math.ceil((e.retryAfter || 60) / 60)); return `Too many attempts. Try again in ${m} minute${m === 1 ? '' : 's'}.`; }
+  if (e.status === 503) return 'Password reset is not set up on this server. Ask the administrator to configure email.';
+  return String(e.message || e);
 }
 async function refreshCloud() {
   cloudList = await cloud.list();
@@ -536,11 +554,35 @@ async function cloudSave(force) {
 }
 function renderCloud() {
   const box = $('cloudPane'); if (!box || !cloudOn) return;
-  const msg = cloudMsg ? `<div class="err">${esc(cloudMsg)}</div>` : '';
+  const msg = (cloudMsg ? `<div class="err">${esc(cloudMsg)}</div>` : '') + (cloudInfo ? `<div style="font-size:13px;margin-top:6px">${esc(cloudInfo)}</div>` : '');
+  if (!cloudUser && cloudView === 'reset') {
+    box.innerHTML = `<h2>Choose a new password</h2><form class="add" id="cloudReset"><label class="full">New password<input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
+      <label class="full">Repeat it<input name="again" type="password" autocomplete="new-password" minlength="8" required></label>
+      <button class="btn" type="submit">Set password</button><button class="btn" type="button" id="cloudBack">Cancel</button></form>${msg}`;
+    // cancelling a link opened in a signed-in tab returns to that session
+    $('cloudBack').onclick = () => { resetToken = null; cloudView = 'auth';
+      cloudDo(async () => { if (cloud.signedIn) { const u = await cloud.me(); cloudUser = u.user || u; await refreshCloud(); } }); };
+    $('cloudReset').onsubmit = ev => { ev.preventDefault(); const f = new FormData(ev.target);
+      if (f.get('password') !== f.get('again')) { cloudMsg = 'The two passwords differ.'; renderCloud(); return; }
+      cloudDo(async () => { await cloud.confirmReset(resetToken, f.get('password')); resetToken = null; cloudView = 'auth'; })
+        .then(() => { if (!cloudMsg) { cloudInfo = 'Password changed and every device signed out. Sign in with your new password.'; renderCloud(); } }); };
+    return;
+  }
+  if (!cloudUser && cloudView === 'forgot') {
+    box.innerHTML = `<h2>Reset your password</h2><form class="add" id="cloudForgot"><label class="full">Email<input name="email" type="email" autocomplete="username" required></label>
+      <button class="btn" type="submit">Email me a reset link</button><button class="btn" type="button" id="cloudBack">Back to sign in</button></form>${msg}`;
+    $('cloudBack').onclick = () => { cloudView = 'auth'; cloudMsg = cloudInfo = ''; renderCloud(); };
+    $('cloudForgot').onsubmit = ev => { ev.preventDefault(); const email = new FormData(ev.target).get('email');
+      cloudDo(async () => { await cloud.requestReset(email); cloudView = 'auth'; })
+        .then(() => { if (!cloudMsg) { cloudInfo = `If an account exists for ${email}, a reset link is on its way. It works once, for 60 minutes.`; renderCloud(); } }); };
+    return;
+  }
   if (!cloudUser) {
     box.innerHTML = `<h2>Cloud projects</h2><form class="add" id="cloudAuth"><label class="full">Email<input name="email" type="email" autocomplete="username" required></label>
       <label class="full">Password<input name="password" type="password" autocomplete="current-password" required></label>
-      <button class="btn" type="submit" data-act="login">Sign in</button><button class="btn" type="submit" data-act="register">Create account</button></form>${msg}`;
+      <button class="btn" type="submit" data-act="login">Sign in</button><button class="btn" type="submit" data-act="register">Create account</button>
+      <button class="btn full" type="button" id="cloudForgotLink" style="border:0;background:none;color:var(--muted);text-decoration:underline">Forgot password?</button></form>${msg}`;
+    $('cloudForgotLink').onclick = () => { cloudView = 'forgot'; cloudMsg = cloudInfo = ''; renderCloud(); };
     let act = 'login'; box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { act = b.dataset.act; });
     $('cloudAuth').onsubmit = ev => { ev.preventDefault(); const f = new FormData(ev.target);
       cloudDo(async () => { cloudUser = await cloud[act](f.get('email'), f.get('password')); await refreshCloud(); }); };
