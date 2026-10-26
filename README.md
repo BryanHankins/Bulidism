@@ -1,6 +1,6 @@
 # buildsim — browser 3D construction planning engine (Rust/WASM)
 
-Prototype v0.9 (Phase 1 code complete; Phase 2 backend in progress). See COMPLETION_STATUS.docx for done vs open.
+Prototype v0.10 (Phase 1 code complete; Phase 2 backend done in code, not yet deployed). See COMPLETION_STATUS.docx for done vs open.
 
 ## Layout
 - crates/bim-core      IFC-aligned model (incl. levels/storeys: name + finished-floor elevation; elements and spaces may sit on one), element tasks (`depends_on` element predecessors + `duration_days`; validate() rejects unknown/self/cyclic deps), ProjectIndex (hashed element/opening lookups for whole-project passes), JSON I/O, validate(), Project::sample()
