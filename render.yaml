@@ -26,9 +26,14 @@ services:
         sync: false
       - key: MAIL_FROM
         sync: false
+      # Error reporting: the DSN of a Sentry (or self-hosted GlitchTip) project. Unset = off.
+      - key: SENTRY_DSN
+        sync: false
 
 databases:
   - name: buildsim-db
     plan: free
     databaseName: buildsim
     user: buildsim
+    # matches the pg_dump client in .github/workflows/backup.yml
+    postgresMajorVersion: "17"

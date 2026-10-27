@@ -290,7 +290,8 @@ pub async fn list_shares(
     ))
 }
 
-/// `PUT /api/projects/{id}/shares` (owner) -> 204; adds or changes a share. 404 if no such user.
+/// `PUT /api/projects/{id}/shares` (owner) -> 204; adds or changes a share. 404 if no such user;
+/// 409 if that account has not verified its email (when this server sends email).
 pub async fn put_share(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -305,11 +306,18 @@ pub async fn put_share(
         ));
     }
     let email = normalize_email(&body.email)?;
-    let user: Option<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE email = $1")
-        .bind(&email)
-        .fetch_optional(&state.db)
-        .await?;
-    let user = user.ok_or(ApiError::NotFound("no user with that email"))?;
+    let user: Option<(Uuid, bool)> =
+        sqlx::query_as("SELECT id, email_verified_at IS NOT NULL FROM users WHERE email = $1")
+            .bind(&email)
+            .fetch_optional(&state.db)
+            .await?;
+    let (user, verified) = user.ok_or(ApiError::NotFound("no user with that email"))?;
+    // an unverified account may belong to someone who registered another person's address
+    if !verified && crate::account::email_enabled(&state).is_some() {
+        return Err(ApiError::Conflict(
+            "that account has not verified its email yet; ask them to use the link in their welcome email",
+        ));
+    }
     if user == auth.user.id {
         return Err(ApiError::BadRequest(
             "cannot share a project with its owner".into(),

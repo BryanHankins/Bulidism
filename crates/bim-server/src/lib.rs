@@ -2,6 +2,7 @@
 //!
 //! All routes live under `/api`; see `router`. The binary (`main.rs`) reads its config from env.
 
+pub mod account;
 pub mod auth;
 pub mod db;
 pub mod error;
@@ -9,8 +10,8 @@ pub mod mail;
 pub mod projects;
 pub mod ratelimit;
 
-use axum::extract::DefaultBodyLimit;
-use axum::http::{header, HeaderValue, Method};
+use axum::extract::{DefaultBodyLimit, State};
+use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
@@ -75,8 +76,27 @@ impl Options {
     }
 }
 
-async fn health() -> Json<Value> {
-    Json(json!({ "ok": true }))
+/// `GET /api/health` -> 200 `{ok: true, db: true}`, or 503 `{ok: false, db: false}` when the
+/// database does not answer within 3 s (what Render's health check and the uptime workflow see).
+async fn health(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+    let ping = sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(&state.db);
+    match tokio::time::timeout(std::time::Duration::from_secs(3), ping).await {
+        Ok(Ok(_)) => (StatusCode::OK, Json(json!({ "ok": true, "db": true }))),
+        Ok(Err(e)) => {
+            tracing::error!("health check: database error: {e}");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "ok": false, "db": false })),
+            )
+        }
+        Err(_) => {
+            tracing::error!("health check: database timed out");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "ok": false, "db": false })),
+            )
+        }
+    }
 }
 
 async fn api_not_found() -> error::ApiError {
@@ -93,7 +113,10 @@ pub fn router(db: PgPool, opts: &Options) -> Router {
         .route("/auth/logout", post(auth::logout))
         .route("/auth/password-reset", post(auth::reset_request))
         .route("/auth/password-reset/confirm", post(auth::reset_confirm))
-        .route("/me", get(auth::me))
+        .route("/auth/verify", post(account::verify))
+        .route("/auth/verify/resend", post(account::resend))
+        .route("/me", get(auth::me).delete(account::delete_account))
+        .route("/me/export", get(account::export))
         .route("/projects", get(p::list).post(p::create))
         .route(
             "/projects/{id}",

@@ -1,6 +1,6 @@
 # buildsim — browser 3D construction planning engine (Rust/WASM)
 
-Prototype v0.10 (Phase 1 code complete; Phase 2 backend done in code, not yet deployed). See COMPLETION_STATUS.docx for done vs open.
+Prototype v0.11 (Phase 1 code complete; Phase 2 backend, monitoring and backups done in code, not yet deployed). See COMPLETION_STATUS.docx for done vs open.
 
 ## Layout
 - crates/bim-core      IFC-aligned model (incl. levels/storeys: name + finished-floor elevation; elements and spaces may sit on one), element tasks (`depends_on` element predecessors + `duration_days`; validate() rejects unknown/self/cyclic deps), ProjectIndex (hashed element/opening lookups for whole-project passes), JSON I/O, validate(), Project::sample()
@@ -64,9 +64,22 @@ and per-project sharing (owner / editor / viewer; no access is a 404). Migration
   /api/auth/password-reset/confirm {token, password}` sets the password and signs the account out everywhere.
   Email goes over SMTP (`SMTP_URL` + `MAIL_FROM`, any provider); without them reset answers 503. The Cloud tab
   has "Forgot password?" and opens the link's set-new-password form.
+- Email verification: with email configured, sign-up mails a 48-hour link (`#verify=<token>`, `POST /api/auth/verify`,
+  `POST /api/auth/verify/resend`). Accounts work before verifying, but nobody can share a project with an unverified
+  address (409), so registering someone else's email gains nothing; a completed password reset also verifies.
+  Accounts that existed before migration 0003 count as verified. Without email nothing is enforced.
+- Your data: `GET /api/me/export` downloads everything stored about the account (owned projects with data and shares,
+  projects shared with you; never password hashes or tokens). `DELETE /api/me {password}` deletes the account and
+  every project it owns. Both are in the Cloud tab under Account.
+- Monitoring: `SENTRY_DSN` sends `error!` logs and panics to Sentry or a self-hosted GlitchTip (no personal data;
+  release = deployed commit). `/api/health` also checks the database (503 when it is down).
+  `.github/workflows/uptime.yml` pings it hourly once the `HEALTH_URL` repository variable is set.
+- Backups: `.github/workflows/backup.yml` runs a daily `pg_dump` (Postgres 17 client; render.yaml pins the database
+  to 17), checks it, encrypts it with AES-256 and keeps it as a 30-day artifact. It needs the `BACKUP_DATABASE_URL`
+  and `BACKUP_PASSPHRASE` repository secrets. Restore with `BACKUP_PASSPHRASE=... scripts/restore-db.sh <file> <db-url>`.
 
     docker compose up --build            # Postgres 16 + server; app and API on http://localhost:8081
-    DATABASE_URL=postgres://... cargo run -p bim-server   # env: BIND_ADDR (else 0.0.0.0:$PORT, else 0.0.0.0:8081), CORS_ORIGIN, WEB_DIR, TRUST_PROXY, PUBLIC_URL (else RENDER_EXTERNAL_URL), SMTP_URL, MAIL_FROM
+    DATABASE_URL=postgres://... cargo run -p bim-server   # env: BIND_ADDR (else 0.0.0.0:$PORT, else 0.0.0.0:8081), CORS_ORIGIN, WEB_DIR, TRUST_PROXY, PUBLIC_URL (else RENDER_EXTERNAL_URL), SMTP_URL, MAIL_FROM, SENTRY_DSN
     DATABASE_URL=postgres://... cargo test -p bim-server  # DB tests; skipped when DATABASE_URL is unset
 
 The Docker images build with Rust 1.90 (`rust-version` in crates/bim-server/Cargo.toml); CI uses current stable.

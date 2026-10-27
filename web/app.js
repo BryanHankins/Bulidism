@@ -5,7 +5,7 @@ import { setLevelElevation } from './levels.js';
 import { costRows, perLabel, rateOut, rateIn, parseDollars, ratesToCsv, parseRatesCsv } from './costs.js';
 import { snapStep, lenToInput, parseLen, fmtArea, areaToInput, parseArea, qtyOut, convertMessage } from './units.js';
 import { kindOf, clickSelect, deleteElements, moveElements, copyElements, pasteElements, rectBounds, commonValue, dependsCycle } from './clipboard.js';
-import { createCloud, resetTokenFromHash } from './cloud.js';
+import { createCloud, linkFromHash } from './cloud.js';
 
 const $ = id => document.getElementById(id);
 // user-supplied strings (names, cost codes) go into innerHTML: always escape
@@ -501,16 +501,30 @@ const cloud = createCloud();
 let cloudOn = false, cloudUser = null, cloudList = null, cloudShares = null, cloudConflict = false, cloudMsg = '';
 // signed-out views: 'auth' (sign in / create), 'forgot' (request a reset email), 'reset' (new password from the emailed link)
 let cloudView = 'auth', cloudInfo = '';
-let resetToken = null;
-// reads an emailed `#reset=<token>` link (on load, or pasted into an already-open tab) and keeps the
-// one-time token out of the address bar, history and bookmarks
-function takeResetLink() {
-  const t = resetTokenFromHash(location.hash); if (!t) return false;
+let resetToken = null, verifyToken = null, deleting = false;
+// reads an emailed `#reset=` / `#verify=` link (on load, or pasted into an already-open tab) and keeps
+// the one-time token out of the address bar, history and bookmarks
+function takeLink() {
+  const l = linkFromHash(location.hash); if (!l) return null;
   try { history.replaceState(null, '', location.pathname + location.search); } catch (_) { /* file:// etc. */ }
-  resetToken = t; cloudView = 'reset'; cloudMsg = cloudInfo = ''; return true;
+  cloudMsg = cloudInfo = '';
+  if (l.kind === 'reset') { resetToken = l.token; cloudView = 'reset'; } else verifyToken = l.token;
+  return l.kind;
 }
-takeResetLink();
-addEventListener('hashchange', () => { if (takeResetLink() && cloudOn) { cloudUser = null; selectTab('cloud'); renderCloud(); } });
+takeLink();
+addEventListener('hashchange', () => {
+  const kind = takeLink(); if (!kind || !cloudOn) return;
+  selectTab('cloud');
+  if (kind === 'reset') { cloudUser = null; renderCloud(); } else verifyFromLink();
+});
+// confirms the address from a `#verify=` link, then shows the result in the Cloud tab
+function verifyFromLink() {
+  const t = verifyToken; verifyToken = null; if (!t) return;
+  cloudDo(async () => { await cloud.verifyEmail(t); if (cloudUser) cloudUser = { ...cloudUser, email_verified: true }; })
+    .then(() => { if (!cloudMsg) { cloudInfo = cloudUser ? 'Email confirmed. Thanks!' : 'Email confirmed. Sign in to continue.'; renderCloud(); } });
+}
+// the full account record (verification flags come only from /me)
+async function loadMe() { const u = await cloud.me(); cloudUser = u.user || u; }
 const CLOUD_LINK_KEY = 'buildsim.cloud.link';
 // the cloud project the open model was loaded from / saved to: {id, name, role, updated_at}
 let cloudLink = (() => { try { return JSON.parse(store.get(CLOUD_LINK_KEY)) || null; } catch (_) { return null; } })();
@@ -519,8 +533,9 @@ async function initCloud() {
   if (!(await cloud.health())) return; // no API: keep the tab hidden
   cloudOn = true; document.querySelector('.tabs [data-tab="cloud"]').hidden = false;
   if (resetToken) { selectTab('cloud'); renderCloud(); return; }
-  if (cloud.signedIn) { try { const u = await cloud.me(); cloudUser = u.user || u; await refreshCloud(); } catch (_) { cloudUser = null; } }
+  if (cloud.signedIn) { try { await loadMe(); await refreshCloud(); } catch (_) { cloudUser = null; } }
   renderCloud();
+  if (verifyToken) { selectTab('cloud'); verifyFromLink(); }
 }
 async function cloudDo(fn, ok) {
   cloudMsg = ''; cloudInfo = '';
@@ -530,7 +545,7 @@ async function cloudDo(fn, ok) {
 }
 function cloudErrorText(e) {
   if (e.rateLimited) { const m = Math.max(1, Math.ceil((e.retryAfter || 60) / 60)); return `Too many attempts. Try again in ${m} minute${m === 1 ? '' : 's'}.`; }
-  if (e.status === 503) return 'Password reset is not set up on this server. Ask the administrator to configure email.';
+  if (e.status === 503) return 'Email is not set up on this server, so password reset and email confirmation are unavailable. Ask the administrator to configure it.';
   return String(e.message || e);
 }
 async function refreshCloud() {
@@ -585,19 +600,36 @@ function renderCloud() {
     $('cloudForgotLink').onclick = () => { cloudView = 'forgot'; cloudMsg = cloudInfo = ''; renderCloud(); };
     let act = 'login'; box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { act = b.dataset.act; });
     $('cloudAuth').onsubmit = ev => { ev.preventDefault(); const f = new FormData(ev.target);
-      cloudDo(async () => { cloudUser = await cloud[act](f.get('email'), f.get('password')); await refreshCloud(); }); };
+      cloudDo(async () => { await cloud[act](f.get('email'), f.get('password')); await loadMe(); await refreshCloud(); })
+        .then(() => { if (act === 'register' && cloudUser && cloudUser.verification_required && !cloudMsg) { cloudInfo = `Welcome! We sent a confirmation link to ${cloudUser.email}.`; renderCloud(); } }); };
     return;
   }
   const L = cloudLink, canWrite = L && L.role !== 'viewer', when = t => t ? new Date(t).toLocaleString() : '';
+  const unverified = cloudUser.verification_required && !cloudUser.email_verified;
   box.innerHTML = `<h2>Cloud projects</h2><div class="row"><span>Signed in as ${esc(cloudUser.email || '')}</span><button class="btn" id="cloudOut">Sign out</button></div>
+    ${unverified ? `<div class="adv warning" id="cloudVerifyBanner">Confirm your email: use the link we sent to ${esc(cloudUser.email)}. Until then nobody can share projects with you.<div style="margin-top:6px"><button class="btn" id="cloudResend">Resend link</button></div></div>` : ''}
     <h2>This model</h2>${L ? `<div style="font-size:13px">Linked to <b>${esc(L.name)}</b> <small style="color:var(--muted)">${esc(L.role)} · saved ${esc(when(L.updated_at))}</small></div>` : '<div style="font-size:13px;color:var(--muted)">Not saved to the cloud yet.</div>'}
     ${cloudConflict ? `<div class="adv error">“${esc(L.name)}” was changed in the cloud since you opened or last saved it.<div style="display:flex;gap:6px;margin-top:6px"><button class="btn" id="cloudReload">Reload cloud version</button><button class="btn" id="cloudOverwrite">Overwrite with mine</button></div></div>` : ''}
     <div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0">${L ? `<button class="btn" id="cloudSave" ${canWrite ? '' : 'disabled title="view-only: use Save as new"'}>Save</button>` : ''}<button class="btn" id="cloudSaveAs">Save as new…</button>${L ? '<button class="btn" id="cloudUnlink">Unlink</button>' : ''}</div>
     ${L && L.role === 'owner' ? `<h2>Share</h2><form class="add" id="cloudShare"><label>Email<input name="email" type="email" required></label><label>Role<select name="role"><option value="editor">editor</option><option value="viewer">viewer</option></select></label><button class="btn full" type="submit">Share</button></form>
       ${(cloudShares || []).map(s => `<div class="el"><span>${esc(s.email)} <small style="color:var(--muted)">${esc(s.role)}</small></span><button data-unshare="${esc(s.email)}" title="Remove access">✕</button></div>`).join('')}` : ''}
     <h2>Your projects <button class="btn" id="cloudRefresh" style="padding:0 6px">↻</button></h2>
-    ${(cloudList || []).map(p => `<div class="el"><span>${esc(p.name)} <small style="color:var(--muted)">${esc(p.role)} · ${esc(when(p.updated_at))}</small></span><span><button class="btn" data-open="${esc(p.id)}" style="color:var(--ink)">Open</button>${p.role === 'owner' ? ` <button data-del="${esc(p.id)}" title="Delete from the cloud">✕</button>` : ''}</span></div>`).join('') || '<small style="color:var(--muted)">No cloud projects yet.</small>'}${msg}`;
+    ${(cloudList || []).map(p => `<div class="el"><span>${esc(p.name)} <small style="color:var(--muted)">${esc(p.role)} · ${esc(when(p.updated_at))}</small></span><span><button class="btn" data-open="${esc(p.id)}" style="color:var(--ink)">Open</button>${p.role === 'owner' ? ` <button data-del="${esc(p.id)}" title="Delete from the cloud">✕</button>` : ''}</span></div>`).join('') || '<small style="color:var(--muted)">No cloud projects yet.</small>'}
+    <h2>Account</h2><div style="display:flex;flex-wrap:wrap;gap:6px"><button class="btn" id="cloudExport">Download my data</button><button class="btn" id="cloudDeleteStart">${deleting ? 'Keep my account' : 'Delete account…'}</button></div>
+    ${deleting ? `<form class="add" id="cloudDelete"><div class="full" style="font-size:13px">Deletes your account and every project you own, also for the people you shared them with. Download your data first if you want a copy.</div>
+      <label class="full">Password<input name="password" type="password" autocomplete="current-password" required></label><button class="btn full" type="submit" style="color:var(--err,#c00)">Delete my account permanently</button></form>` : ''}${msg}`;
   $('cloudOut').onclick = () => cloudDo(async () => { await cloud.logout(); cloudUser = null; cloudList = null; });
+  if ($('cloudResend')) $('cloudResend').onclick = () => cloudDo(async () => { await cloud.resendVerification(); })
+    .then(() => { if (!cloudMsg) { cloudInfo = `Sent a new confirmation link to ${cloudUser.email}.`; renderCloud(); } });
+  $('cloudExport').onclick = () => cloudDo(async () => {
+    const data = await cloud.exportData();
+    download(`buildsim-export-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(data, null, 2), 'application/json');
+  }, 'downloaded your data');
+  $('cloudDeleteStart').onclick = () => { deleting = !deleting; cloudMsg = cloudInfo = ''; renderCloud(); };
+  if ($('cloudDelete')) $('cloudDelete').onsubmit = ev => { ev.preventDefault(); const pw = new FormData(ev.target).get('password');
+    if (!confirm(`Permanently delete ${cloudUser.email} and every project you own, including for the people you shared them with? This cannot be undone.`)) return;
+    cloudDo(async () => { await cloud.deleteAccount(pw); deleting = false; cloudUser = null; cloudList = null; setCloudLink(null); })
+      .then(() => { if (!cloudUser && !cloudMsg) { cloudInfo = 'Your account and its projects were deleted.'; renderCloud(); } }); };
   if ($('cloudSave')) $('cloudSave').onclick = () => cloudDo(() => cloudSave(false), 'saved');
   if ($('cloudOverwrite')) $('cloudOverwrite').onclick = () => cloudDo(() => cloudSave(true), 'saved (overwrote the cloud version)');
   if ($('cloudReload')) $('cloudReload').onclick = () => cloudDo(async () => openCloudData(await cloud.get(L.id)), 'reloaded the cloud version');

@@ -1,7 +1,7 @@
 // node --test web/cloud.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createCloud, CloudError, TOKEN_KEY, resetTokenFromHash } from './cloud.js';
+import { createCloud, CloudError, TOKEN_KEY, resetTokenFromHash, linkFromHash } from './cloud.js';
 
 // stub fetch: routes "METHOD /path" -> [status, body]; records every call
 function stub(routes) {
@@ -119,4 +119,36 @@ test('reset token is read only from a well-formed #reset= hash', () => {
   const t = '0123456789abcdef'.repeat(4);
   assert.equal(resetTokenFromHash('#reset=' + t), t);
   for (const bad of ['', '#', '#reset=', '#reset=xyz', '#reset=' + t + '&x=1', '#other=' + t, '#reset=<script>']) assert.equal(resetTokenFromHash(bad), null, bad);
+});
+
+test('verify / reset links are told apart; other hashes are ignored', () => {
+  const t = 'ab'.repeat(32);
+  assert.deepEqual(linkFromHash('#verify=' + t), { kind: 'verify', token: t });
+  assert.deepEqual(linkFromHash('#reset=' + t), { kind: 'reset', token: t });
+  assert.equal(resetTokenFromHash('#verify=' + t), null);
+  for (const bad of ['#verify=', '#verify=zz', '#login=' + t, '#verify=' + t + '#x']) assert.equal(linkFromHash(bad), null, bad);
+});
+
+test('account: verify, resend, export and delete paths; delete drops the token', async () => {
+  const { fetch, calls } = stub({
+    'POST /api/auth/login': [200, { user: { id: 'u1', email: 'a@b.c', email_verified: false }, token: 'T1' }],
+    'POST /api/auth/verify': [204],
+    'POST /api/auth/verify/resend': [202],
+    'GET /api/me/export': [200, { format: 'buildsim-account-export/1', projects: [] }],
+    'DELETE /api/me': init => JSON.parse(init.body).password === 'right one' ? [204] : [400, { error: 'password is incorrect' }],
+  });
+  const storage = memStore(), c = createCloud({ base: '/api', fetch, storage });
+  await c.login('a@b.c', 'pw');
+  await c.verifyEmail('cd'.repeat(32));
+  assert.deepEqual(calls.at(-1).body, { token: 'cd'.repeat(32) });
+  await c.resendVerification();
+  assert.equal(calls.at(-1).headers.Authorization, 'Bearer T1');
+  assert.equal((await c.exportData()).format, 'buildsim-account-export/1');
+  // a wrong password is a 400, which must not sign the user out
+  await assert.rejects(c.deleteAccount('wrong'), e => e.status === 400 && /incorrect/.test(e.message));
+  assert.equal(c.signedIn, true);
+  await c.deleteAccount('right one');
+  assert.equal(calls.at(-1).method, 'DELETE');
+  assert.equal(c.signedIn, false);
+  assert.equal(storage.getItem(TOKEN_KEY), null);
 });

@@ -118,7 +118,7 @@ async fn health() {
         return;
     };
     let (s, v) = call(&app, Method::GET, "/api/health", None, None).await;
-    assert_eq!((s, v), (StatusCode::OK, json!({"ok": true})));
+    assert_eq!((s, v), (StatusCode::OK, json!({"ok": true, "db": true})));
     let (s, v) = call(&app, Method::GET, "/api/nope", None, None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     assert!(v["error"].is_string());
@@ -203,7 +203,10 @@ async fn register_login_logout() {
 
     let (s, v) = call(&app, Method::GET, "/api/me", Some(&t2), None).await;
     assert_eq!(s, StatusCode::OK);
-    assert_eq!(v, json!({"id": id, "email": e}));
+    assert_eq!(
+        v,
+        json!({"id": id, "email": e, "email_verified": false, "verification_required": false})
+    );
 
     // Logout revokes only that token.
     let (s, _) = call(&app, Method::POST, "/api/auth/logout", Some(&t2), None).await;
@@ -582,6 +585,12 @@ fn reset_opts(outbox: &Arc<Outbox>) -> Options {
 
 /// Waits for the background send, then returns the token from the mailed link to `to`.
 async fn mailed_token(outbox: &Outbox, to: &str) -> String {
+    mailed_link(outbox, to, "reset").await
+}
+
+/// Waits for the background send, then returns the token from the newest `#<kind>=` link to `to`.
+async fn mailed_link(outbox: &Outbox, to: &str, kind: &str) -> String {
+    let prefix = format!("https://app.example/#{kind}=");
     for _ in 0..100 {
         let link = outbox
             .0
@@ -589,21 +598,22 @@ async fn mailed_token(outbox: &Outbox, to: &str) -> String {
             .unwrap()
             .iter()
             .rev()
-            .find(|(t, _)| t == to)
-            .map(|(_, b)| {
-                let at = b.find("https://app.example/#reset=").expect("link in body");
-                b[at + "https://app.example/#reset=".len()..]
-                    .split_whitespace()
-                    .next()
-                    .unwrap()
-                    .to_string()
+            .filter(|(t, _)| t == to)
+            .find_map(|(_, b)| {
+                let at = b.find(&prefix)?;
+                Some(
+                    b[at + prefix.len()..]
+                        .split_whitespace()
+                        .next()?
+                        .to_string(),
+                )
             });
         if let Some(t) = link {
             return t;
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    panic!("no reset email to {to}");
+    panic!("no {kind} email to {to}");
 }
 
 async fn login(app: &Router, email: &str, password: &str) -> StatusCode {
@@ -923,4 +933,321 @@ async fn client_ip_from_forwarded_for_only_when_trusted() {
         register(app.clone(), "2.2.2.2").await,
         StatusCode::TOO_MANY_REQUESTS
     );
+}
+
+async fn share(app: &Router, token: &str, project: &str, email: &str) -> (StatusCode, Value) {
+    call(
+        app,
+        Method::PUT,
+        &format!("/api/projects/{project}/shares"),
+        Some(token),
+        Some(json!({"email": email, "role": "viewer"})),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn email_verification_gates_sharing() {
+    let outbox = Arc::new(Outbox::default());
+    let Some((app, _)) = setup_with(reset_opts(&outbox)).await else {
+        return;
+    };
+    let (_, owner) = user(&app).await;
+    let (e, t) = user(&app).await;
+    let (s, me) = call(&app, Method::GET, "/api/me", Some(&t), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(me["email_verified"], json!(false));
+    assert_eq!(me["verification_required"], json!(true));
+    let p = new_project(&app, &owner, "Gated").await;
+    let pid = p["id"].as_str().unwrap();
+    // an unproven address cannot receive a share
+    let (s, v) = share(&app, &owner, pid, &e).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("not verified"));
+
+    let token = mailed_link(&outbox, &e, "verify").await;
+    let verify = |tok: String| {
+        let app = app.clone();
+        async move {
+            call(
+                &app,
+                Method::POST,
+                "/api/auth/verify",
+                None,
+                Some(json!({"token": tok})),
+            )
+            .await
+        }
+    };
+    let (s, _) = verify("nope".into()).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let (s, _) = verify(token.clone()).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (s, _) = verify(token).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "single use");
+    let (_, me) = call(&app, Method::GET, "/api/me", Some(&t), None).await;
+    assert_eq!(me["email_verified"], json!(true));
+    let (s, _) = share(&app, &owner, pid, &e).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    // nothing left to resend
+    let (s, _) = call(
+        &app,
+        Method::POST,
+        "/api/auth/verify/resend",
+        Some(&t),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    // login reports the flag too
+    let (_, v) = call(
+        &app,
+        Method::POST,
+        "/api/auth/login",
+        None,
+        Some(json!({"email": e, "password": "correct horse"})),
+    )
+    .await;
+    assert_eq!(v["user"]["email_verified"], json!(true));
+}
+
+#[tokio::test]
+async fn verification_resend_and_reset_also_verify() {
+    let outbox = Arc::new(Outbox::default());
+    let opts = Options {
+        limits: tight_limits(),
+        ..reset_opts(&outbox)
+    };
+    let Some((app, _)) = setup_with(opts).await else {
+        return;
+    };
+    let (e, t) = user(&app).await;
+    mailed_link(&outbox, &e, "verify").await;
+    let (s, _) = call(
+        &app,
+        Method::POST,
+        "/api/auth/verify/resend",
+        Some(&t),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let (s, _) = call(
+        &app,
+        Method::POST,
+        "/api/auth/verify/resend",
+        Some(&t),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "one resend per window");
+    let verify_mails = || {
+        outbox
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(to, b)| *to == e && b.contains("#verify="))
+            .count()
+    };
+    for _ in 0..50 {
+        if verify_mails() == 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(verify_mails(), 2);
+    // a completed password reset proves the address as well
+    let (s, _) = call(
+        &app,
+        Method::POST,
+        "/api/auth/password-reset",
+        None,
+        Some(json!({"email": e})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let token = mailed_token(&outbox, &e).await;
+    let (s, _) = call(
+        &app,
+        Method::POST,
+        "/api/auth/password-reset/confirm",
+        None,
+        Some(json!({"token": token, "password": "brand new pass"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (s, v) = call(
+        &app,
+        Method::POST,
+        "/api/auth/login",
+        None,
+        Some(json!({"email": e, "password": "brand new pass"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["user"]["email_verified"], json!(true));
+}
+
+#[tokio::test]
+async fn verification_not_enforced_without_email() {
+    let Some((app, _)) = setup().await else {
+        return;
+    };
+    let (_, owner) = user(&app).await;
+    let (e, t) = user(&app).await;
+    let (_, me) = call(&app, Method::GET, "/api/me", Some(&t), None).await;
+    assert_eq!(me["verification_required"], json!(false));
+    let p = new_project(&app, &owner, "Open").await;
+    let (s, _) = share(&app, &owner, p["id"].as_str().unwrap(), &e).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (s, _) = call(
+        &app,
+        Method::POST,
+        "/api/auth/verify/resend",
+        Some(&t),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn export_contains_own_and_shared_data_only() {
+    let Some((app, _)) = setup().await else {
+        return;
+    };
+    let (owner_email, owner) = user(&app).await;
+    let (friend_email, friend) = user(&app).await;
+    let p = new_project(&app, &owner, "Exported").await;
+    let pid = p["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        share(&app, &owner, &pid, &friend_email).await.0,
+        StatusCode::NO_CONTENT
+    );
+
+    let req = Request::builder()
+        .uri("/api/me/export")
+        .header(header::AUTHORIZATION, format!("Bearer {owner}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let cd = res.headers()[header::CONTENT_DISPOSITION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        cd.starts_with("attachment; filename=\"buildsim-export-"),
+        "{cd}"
+    );
+    let raw = res.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8(raw.to_vec()).unwrap();
+    assert!(
+        !text.contains("password") && !text.contains("argon2"),
+        "no secrets in export"
+    );
+    let v: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["format"], "buildsim-account-export/1");
+    assert_eq!(v["account"]["email"], json!(owner_email));
+    assert_eq!(v["projects"].as_array().unwrap().len(), 1);
+    assert_eq!(v["projects"][0]["id"], json!(pid));
+    assert_eq!(v["projects"][0]["data"]["name"], json!("Exported"));
+    assert_eq!(
+        v["projects"][0]["shared_with"],
+        json!([{"email": friend_email, "role": "viewer"}])
+    );
+    assert_eq!(v["shared_with_me"], json!([]));
+
+    let (s, fv) = call(&app, Method::GET, "/api/me/export", Some(&friend), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(fv["projects"], json!([]));
+    assert_eq!(fv["shared_with_me"][0]["owner_email"], json!(owner_email));
+    assert_eq!(fv["shared_with_me"][0]["role"], json!("viewer"));
+    let (s, _) = call(&app, Method::GET, "/api/me/export", None, None).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn delete_account_needs_password_and_removes_everything() {
+    let Some((app, pool)) = setup().await else {
+        return;
+    };
+    let (e, t) = user(&app).await;
+    let (friend_email, friend) = user(&app).await;
+    let p = new_project(&app, &t, "Doomed").await;
+    let pid = p["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        share(&app, &t, &pid, &friend_email).await.0,
+        StatusCode::NO_CONTENT
+    );
+    let del = |pw: &'static str| {
+        let (app, t) = (app.clone(), t.clone());
+        async move {
+            call(
+                &app,
+                Method::DELETE,
+                "/api/me",
+                Some(&t),
+                Some(json!({"password": pw})),
+            )
+            .await
+        }
+    };
+    let (s, v) = del("wrong password").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    let (s, _) = call(&app, Method::GET, "/api/me", Some(&t), None).await;
+    assert_eq!(s, StatusCode::OK, "still signed in after a wrong password");
+    let (s, _) = del("correct horse").await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (s, _) = call(&app, Method::GET, "/api/me", Some(&t), None).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    let (s, _) = call(
+        &app,
+        Method::POST,
+        "/api/auth/login",
+        None,
+        Some(json!({"email": e, "password": "correct horse"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    // owned projects go too, also for the people they were shared with
+    let (s, _) = call(
+        &app,
+        Method::GET,
+        &format!("/api/projects/{pid}"),
+        Some(&friend),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM projects WHERE id = $1::uuid")
+        .bind(&pid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
+    // the address is free again
+    let (s, _) = call(
+        &app,
+        Method::POST,
+        "/api/auth/register",
+        None,
+        Some(json!({"email": e, "password": "correct horse"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED);
+}
+
+/// Needs no database: the pool points at a port nothing listens on.
+#[tokio::test]
+async fn health_is_503_when_the_database_is_down() {
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_millis(500))
+        .connect_lazy("postgres://nobody@127.0.0.1:1/none")
+        .unwrap();
+    let app = router(pool, &Options::default());
+    let (s, v) = call(&app, Method::GET, "/api/health", None, None).await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(v, json!({"ok": false, "db": false}));
 }
