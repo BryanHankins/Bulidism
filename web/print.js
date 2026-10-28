@@ -1,6 +1,6 @@
 // Printable code-check report: a standalone page the browser prints or saves as PDF.
 // Pure function of the engine report, so it can be tested without a browser.
-import { fmtArea, fmtVol } from './units.js';
+import { fmtArea, fmtVol, fmtMeasure, fmtLen } from './units.js';
 import './cites.js';
 
 const { citeHtml } = globalThis.BuildsimCites;
@@ -11,6 +11,43 @@ const money = v => '$' + (+v).toLocaleString('en-US', { minimumFractionDigits: 2
 const cssStr = v => String(v).replace(/[\\"]/g, c => '\\' + c).replace(/[\r\n<]/g, ' ');
 const RANK = { error: 0, warning: 1, info: 2 };
 const LABEL = { error: 'Error', warning: 'Warning', info: 'Info' };
+
+/** Data gaps that weaken the results; listed before the analysis so readers weigh it. */
+function readinessBlock(items) {
+  if (!items || !items.length) return '';
+  return `<h2>Model readiness</h2><ul style="margin:4px 0 0;padding-left:18px">${items.map(i =>
+    `<li${i.severity === 'warning' ? ' class="sev warning" style="font-weight:400"' : ''}>${i.count ? i.count + ' ' : ''}${esc(i.message)}${i.examples.length ? ` (${i.examples.map(esc).join(', ')}${i.count > i.examples.length ? ', …' : ''})` : ''}</li>`).join('')}</ul>`;
+}
+
+/** The code analysis sheet ("code data block"); empty when the rule set has no parameters. */
+function codeSheet(c, units, table) {
+  if (!c) return '';
+  const len = m => esc(fmtLen(m, units)), yes = b => b ? 'Yes' : 'No';
+  const cell = (prov, req) => `<td class="num${prov + 1e-6 >= req ? '' : ' sev warning'}">`;
+  const rows = [
+    ['Construction type', c.construction_type ? esc(c.construction_type) : '<span class="unverified">not set</span> (allowable area and height not evaluated)'],
+    ['Sprinklered throughout', yes(c.sprinklered)], ['Emergency voice/alarm', yes(c.voice_alarm)],
+    ['Stories', c.stories || '—'], ['Height above lowest level', c.height_m == null ? '—' : len(c.height_m)],
+    ['Total floor area (spaces)', esc(fmtArea(c.total_area_m2, units))], ['Total occupant load', c.total_occupant_load],
+    ['Egress capacity factors', c.reduced_factors ? 'reduced (sprinklered + voice/alarm)' : 'standard'],
+  ];
+  return `<h2>Code analysis</h2>
+<table><tbody>${rows.map(([k, v]) => `<tr><th style="width:40%">${k}</th><td>${v}</td></tr>`).join('')}</tbody></table>
+${table(['Occupancy', 'Area#', 'Occupant load#'], c.occupancies.map(o => `<tr><td>${esc(o.occupancy)}</td><td class="num">${esc(fmtArea(o.area_m2, units))}</td><td class="num">${o.occupant_load}</td></tr>`), 'No spaces defined.')}
+<h3 style="font-size:10.5pt;margin:12px 0 4px">Means of egress by story <span style="font-weight:400;color:#444">(${esc(c.cite_exits)}; ${esc(c.cite_capacity)})</span></h3>
+${table(['Story', 'Occupant load#', 'Exits req / prov#', 'Door width req / prov#', 'Stair width req / prov#'],
+  c.levels.map(l => `<tr><td>${esc(l.name)}${l.spaces_without_factor ? ` <span class="unverified">(${l.spaces_without_factor} space(s) uncounted)</span>` : ''}</td><td class="num">${l.occupant_load}</td>` +
+    `${cell(l.exits_provided, l.exits_required)}${l.exits_required} / ${l.exits_provided}</td>` +
+    `${cell(l.door_width_provided_m, l.door_width_required_m)}${len(l.door_width_required_m)} / ${len(l.door_width_provided_m)}</td>` +
+    `${l.stair_width_required_m == null ? '<td class="num">' : cell(l.stair_width_provided_m, l.stair_width_required_m)}${l.stair_width_required_m == null ? '—' : `${len(l.stair_width_required_m)} / ${len(l.stair_width_provided_m)}`}</td></tr>`),
+  'No stories.')}
+<h3 style="font-size:10.5pt;margin:12px 0 4px">Plumbing fixtures required <span style="font-weight:400;color:#444">(${esc(c.cite_plumbing)})</span></h3>
+${table(['Occupancy', 'Fixture', 'Occupant load#', 'Required#', 'Parameter verification'],
+  c.plumbing.map(p => `<tr><td>${esc(p.occupancy)}</td><td>${esc(p.fixture)}</td><td class="num">${p.occupant_load}</td><td class="num">${p.required}${p.per_sex ? ` (${p.per_group} per sex)` : ''}</td><td class="unverified">${esc(p.verified)}</td></tr>`),
+  'No plumbing ratios for these occupancies in this rule set.')}
+<p class="none">Analysis parameters: ${esc(c.verified)}</p>
+<ul class="none" style="margin:4px 0 0;padding-left:18px">${c.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`;
+}
 
 /**
  * @param r       report JSON from bim.run (advisory messages already in display units)
@@ -67,9 +104,11 @@ tr { break-inside: avoid; } td.num, th.num { text-align: right; white-space: now
  <div><b>${(r.rules_checked || []).length}</b>Rules checked</div><div><b>${r.clashes.length}</b>Clashes</div>
 </div>
 
+${readinessBlock(r.readiness)}
+${codeSheet(r.code_summary, units, table)}
 <h2>Findings</h2>
-${table(['##', 'Severity', 'Element / space', 'Finding', 'Citation'],
-  findings.map((a, i) => `<tr><td class="num">${i + 1}</td><td class="sev ${esc(a.severity)}">${esc(LABEL[a.severity] || a.severity)}</td><td>${esc(a.subject)}</td><td>${esc(a.message)}</td><td>${citeHtml(a.cite)}</td></tr>`),
+${table(['##', 'Severity', 'Element / space', 'Finding', 'Measured#', 'Required#', 'Citation'],
+  findings.map((a, i) => `<tr><td class="num">${i + 1}</td><td class="sev ${esc(a.severity)}">${esc(LABEL[a.severity] || a.severity)}</td><td>${esc(a.subject)}</td><td>${esc(a.check || a.message)}</td><td class="num">${esc(fmtMeasure(a.measured, a.measure, units))}</td><td class="num">${a.limit == null ? '—' : `${a.bound === 'max' ? '≤' : '≥'} ${esc(fmtMeasure(a.limit, a.measure, units))}`}</td><td>${citeHtml(a.cite)}</td></tr>`),
   'No findings from this rule set.')}
 
 <h2>Rules checked</h2>

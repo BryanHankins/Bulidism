@@ -25,7 +25,7 @@ textarea{width:100%;height:220px;font:12px/1.4 ui-monospace,Menlo,Consolas,monos
 <body>
 <div id="app">
 <header><h1 id="title">buildsim</h1><span class="sub" id="subtitle"></span><span id="status"></span><span style="flex:1"></span>
- <select class="btn" id="units" title="Display units (the model is stored in metres)"><option value="imperial">ft-in</option><option value="metric">m</option></select> <button class="btn" id="undo" disabled title="Ctrl+Z">↶</button><button class="btn" id="redo" disabled title="Ctrl+Y">↷</button><button class="btn" id="new">New</button><button class="btn" id="open" title="Open a project (.json) or import an IFC model (.ifc)">Open / IFC</button><button class="btn" id="save">Save</button><button class="btn" id="exportCsv">CSV</button><button class="btn" id="exportXlsx" hidden title="Quantity takeoff as an Excel workbook">XLSX</button><button class="btn" id="exportBcf" hidden title="Clashes as BCF issues (open in a BIM coordination tool)">BCF</button><button class="btn" id="exportHtml">Report</button><button class="btn" id="printReport" title="Printable code-check report (save as PDF from the print dialog)">Print</button><button class="btn" id="play">Play</button>
+ <select class="btn" id="units" title="Display units (the model is stored in metres)"><option value="imperial">ft-in</option><option value="metric">m</option></select> <button class="btn" id="undo" disabled title="Ctrl+Z">↶</button><button class="btn" id="redo" disabled title="Ctrl+Y">↷</button><button class="btn" id="new">New</button><button class="btn" id="open" title="Open a project (.json) or import an IFC model (.ifc)">Open / IFC</button><button class="btn" id="save">Save</button><button class="btn" id="exportCsv">CSV</button><button class="btn" id="exportXlsx" hidden title="Quantity takeoff as an Excel workbook">XLSX</button><button class="btn" id="exportBcf" title="Findings and clashes as BCF 2.1 issues (Revit, Solibri, BIMcollab)">BCF</button><button class="btn" id="exportHtml">Report</button><button class="btn" id="printReport" title="Printable code-check report (save as PDF from the print dialog)">Print</button><button class="btn" id="play">Play</button>
  <input type="file" id="file" accept=".json,.ifc,application/json" hidden></header>
 <div id="view"><canvas id="c"></canvas>
  <div id="hud"><div class="day">Day <span id="day">0</span> / <span id="total">0</span></div><div class="cost">Cumulative cost $<span id="cost">0</span></div><input id="slider" type="range" min="0" max="0" value="0" step="1"></div>
@@ -34,11 +34,13 @@ textarea{width:100%;height:220px;font:12px/1.4 ui-monospace,Menlo,Consolas,monos
  <div id="importNotes" class="disclaimer" hidden></div>
  <div class="tabs"><button class="btn" data-tab="report" aria-selected="true">Report</button><button class="btn" data-tab="edit">Edit</button><button class="btn" data-tab="json">JSON</button><button class="btn" data-tab="cloud" hidden>Cloud</button></div>
  <div class="pane" id="pane-report">
+  <div id="readiness"></div>
   <h2>Legend</h2><div class="legend" id="legend"></div>
   <label class="chk"><input type="checkbox" id="showClash"> Show clashes (<span id="nclash">0</span>)</label>
   <label class="chk"><input type="checkbox" id="showSpaces" checked> Show space outlines</label>
   <label class="chk" id="levelRow" hidden>Level <select id="levelFilter"></select></label>
   <h2>Spaces</h2><div id="spaceList"></div>
+  <h2>Code analysis</h2><div id="codeSummary"></div>
   <h2>Schedule</h2><div id="phases"></div>
   <h2>Cost by phase</h2><div id="costs"></div>
   <h2>Advisories (<span id="nadv">0</span>)</h2><div id="advs"></div>
@@ -49,6 +51,7 @@ textarea{width:100%;height:220px;font:12px/1.4 ui-monospace,Menlo,Consolas,monos
   <h2>Place <small style="font-weight:400;color:var(--muted)">· drag the selection to move it · Shift/Ctrl+click adds to it</small></h2><div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"><button class="btn" id="placeWall">Place wall (2 clicks)</button><button class="btn" id="placeCol">Place column</button><button class="btn" id="placeDoor">Place door</button><button class="btn" id="placeSpace">Draw space (drag)</button><span id="placeMsg" style="font-size:12px;color:var(--muted)"></span></div>
   <h2>Add element</h2>
   <form class="add" id="addForm"><label class="full">Type<select id="kind"></select></label><div id="fields" class="full" style="display:contents"></div><button class="btn full" type="submit">Add</button></form>
+  <h2>Building</h2><div id="buildingEdit"></div>
   <h2>Rule set</h2><div id="ruleSetEdit"></div>
   <h2>Levels</h2><div id="levelEdit"></div>
   <h2>Phases</h2><div id="phaseEdit"></div>

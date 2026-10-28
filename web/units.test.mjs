@@ -1,7 +1,7 @@
 // node --test web/units.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ftIn, parseLen, fmtArea, fmtVol, parseArea, qtyOut, convertMessage, lenToInput, snapStep, M_PER_IN, M_PER_FT } from './units.js';
+import { ftIn, parseLen, fmtArea, fmtVol, fmtMeasure, parseArea, qtyOut, convertMessage, lenToInput, snapStep, M_PER_IN, M_PER_FT } from './units.js';
 
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
 
@@ -52,4 +52,8 @@ test('areas, quantities, messages, snap', () => {
   near(snapStep('imperial'), 0.1524);
   assert.equal(fmtVol(0.15, 'imperial'), '5.3 cf');
   assert.equal(fmtVol(0.15, 'metric'), '0.150 m³');
+  assert.equal(fmtMeasure(0.813, 'length', 'imperial'), `2'-8"`);
+  assert.equal(fmtMeasure(8.04, 'ratio', 'metric'), '1:8.0');
+  assert.equal(fmtMeasure(1, 'count', 'metric'), '1');
+  assert.equal(fmtMeasure(null, 'length', 'metric'), '—');
 });
