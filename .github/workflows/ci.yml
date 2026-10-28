@@ -41,5 +41,13 @@ jobs:
       - run: cargo install wasm-bindgen-cli --version 0.2.92 --locked
       - run: wasm-bindgen target/wasm32-unknown-unknown/release/bim_wasm.wasm --target web --out-dir web/pkg
       - run: mkdir -p web/rules && cp rules/*.json web/rules/
+      # browser end-to-end tests against the build just made
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm install --no-audit --no-fund
+        working-directory: web/e2e
+      - run: npx playwright install --with-deps chromium
+        working-directory: web/e2e
+      - run: node --test web/e2e/*.e2e.mjs
       - uses: actions/upload-artifact@v4
         with: { name: web, path: web }

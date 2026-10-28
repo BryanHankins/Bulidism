@@ -12,6 +12,13 @@ units.js, costs.js, levels.js, print.js, clipboard.js (multi-select delete/move,
 drawn spaces), cites.js (citation -> code-text URL; also a classic script for viewer.js and the exported report),
 cloud.js (cloud projects API client). Run them with `node --test web/*.test.mjs`.
 
+Browser end-to-end tests (web/e2e/: the real app, wasm engine and viewer in headless Chromium; also run in CI after the wasm build): build web/pkg and copy rules to web/rules as above, then
+
+    (cd web/e2e && npm install && npx playwright install chromium)
+    node --test web/e2e/*.e2e.mjs
+
+With Playwright installed elsewhere, point `PLAYWRIGHT_MODULE` at its index.js instead of `npm install`.
+
 Keys: Shift/Ctrl+click toggles selection, Delete, Ctrl+C / Ctrl+V / Ctrl+D (duplicate), Ctrl+Z / Ctrl+Y, Esc.
 
 Engine features are detected, not assumed: the XLSX/BCF buttons appear only when the wasm exports
