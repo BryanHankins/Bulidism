@@ -1,0 +1,39 @@
+# Local/self-hosted stack: Postgres 16 + bim-server (API at /api, web app at /).
+#   docker compose up --build      then open http://localhost:8081
+# Change POSTGRES_PASSWORD (and DATABASE_URL to match) before exposing this anywhere.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: bim
+      POSTGRES_PASSWORD: bim
+      POSTGRES_DB: bim
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bim -d bim"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  server:
+    build:
+      context: .
+      dockerfile: crates/bim-server/Dockerfile
+    environment:
+      DATABASE_URL: postgres://bim:bim@db:5432/bim
+      BIND_ADDR: 0.0.0.0:8081
+      # CORS_ORIGIN: http://localhost:8080   # only if the web app is served from another origin
+      # Password reset email (both required; reset is off without them):
+      # SMTP_URL: smtps://USER:PASSWORD@smtp.example.com:465
+      # MAIL_FROM: buildsim <no-reply@example.com>
+      PUBLIC_URL: http://localhost:8081      # base of the links in reset emails
+      # TRUST_PROXY: "true"                  # only behind a reverse proxy that sets X-Forwarded-For
+    ports:
+      - "8081:8081"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

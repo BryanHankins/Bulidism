@@ -1,0 +1,30 @@
+[package]
+name = "bim-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+# Matches the rust:1.90 images in web/Dockerfile and crates/bim-server/Dockerfile (lettre needs edition 2024).
+rust-version = "1.90"
+
+[dependencies]
+bim-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+axum = { version = "=0.8.4", default-features = false, features = ["http1", "json", "tokio"] }
+tokio = { version = "=1.53.3", features = ["macros", "rt-multi-thread", "net", "signal"] }
+sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "uuid", "chrono", "json"] }
+chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
+argon2 = { version = "=0.5.3", features = ["std"] }
+sha2 = "=0.10.9"
+rand = "=0.8.8"
+hex = "=0.4.3"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls", "rustls", "ring", "webpki-roots", "hostname"] }
+tower-http = { version = "=0.6.11", features = ["cors", "fs", "trace"] }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+tower = { version = "=0.5.3", features = ["util"] }
+http-body-util = "=0.1.5"

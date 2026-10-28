@@ -13,3 +13,7 @@ bim-takeoff.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+bim-export.workspace = true
+glam.workspace = true

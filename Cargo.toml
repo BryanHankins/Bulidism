@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/bim-core", "crates/bim-geom", "crates/bim-schedule", "crates/bim-rules", "crates/bim-takeoff", "crates/bim-report", "crates/bim-ifc", "crates/bim-cli", "crates/bim-wasm"]
+members = ["crates/bim-core", "crates/bim-geom", "crates/bim-schedule", "crates/bim-rules", "crates/bim-takeoff", "crates/bim-report", "crates/bim-ifc", "crates/bim-cli", "crates/bim-wasm", "crates/bim-export", "crates/bim-server"]
 
 [workspace.package]
 version = "0.1.0"
@@ -8,11 +8,11 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-serde = { version = "=1.0.210", features = ["derive"] }
-serde_json = "=1.0.128"
-thiserror = "=1.0.64"
-uuid = { version = "=1.10.0", features = ["v4", "serde", "js"] }
-glam = { version = "=0.29.2", features = ["serde"] }
+serde = { version = "1.0.210", features = ["derive"] }
+serde_json = "1.0.128"
+thiserror = "1.0.64"
+uuid = { version = "1.10.0", features = ["v4", "serde", "js"] }
+glam = { version = "0.29.2", features = ["serde"] }
 bim-core = { path = "crates/bim-core" }
 bim-geom = { path = "crates/bim-geom" }
 bim-schedule = { path = "crates/bim-schedule" }
@@ -20,6 +20,7 @@ bim-rules = { path = "crates/bim-rules" }
 bim-takeoff = { path = "crates/bim-takeoff" }
 bim-report = { path = "crates/bim-report" }
 bim-ifc = { path = "crates/bim-ifc" }
+bim-export = { path = "crates/bim-export" }
 
 [profile.release]
 opt-level = "z"

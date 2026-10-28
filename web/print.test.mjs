@@ -86,3 +86,9 @@ test('empty states and a reviewed rule set', () => {
   assert.ok(h.includes('No cross-discipline clashes.') && h.includes('No spaces defined.'));
   assert.ok(h.includes('reviewed by J. Doe, RA') && !h.includes('not been reviewed'));
 });
+
+test('citations link to the code text in a new tab', () => {
+  assert.ok(printHtml(report(), 'metric').includes('<td>§1010.1.1</td>'), 'a bare section names no code book: plain text');
+  const r = printHtml(report({ advisories: [{ rule_id: 'x', cite: 'IBC 2024 §1010.1.1', severity: 'error', subject: 'D', message: 'm' }] }), 'metric');
+  assert.ok(r.includes('<a href="https://codes.iccsafe.org/content/IBC2024P1/chapter-10-means-of-egress" target="_blank" rel="noopener noreferrer">IBC 2024 §1010.1.1</a>'));
+});

@@ -40,6 +40,8 @@ pub struct ElementOut {
     pub discipline: String,
     pub phase: u32,
     pub start_day: u32,
+    /// start_day + duration_days (equal to start_day when the element has no duration).
+    pub finish_day: u32,
     pub cost_usd: f64,
     pub qty: f32,
     pub unit: String,
@@ -98,7 +100,10 @@ pub struct Report {
     pub rule_set: String,
     pub code_edition: String,
     pub rules_verified: String,
+    /// Project finish: the later of the phase CPM end and the last element task finish.
     pub total_days: u32,
+    /// Phase critical-path length alone (element tasks can run past it).
+    pub phase_days: u32,
     /// Exact sum of element costs (summed in cents, then converted).
     pub total_cost_usd: f64,
     pub phases: Vec<PhaseOut>,
@@ -119,15 +124,24 @@ pub struct Report {
 
 pub const CLASH_TOLERANCE_M3: f32 = 0.001;
 
+/// `validate()` as a Result: the gate every pipeline entry point (report, exports) runs first.
+pub fn check(project: &Project) -> Result<(), ReportError> {
+    let problems = project.validate();
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(ReportError::Invalid(
+            problems.iter().map(|e| e.to_string()).collect(),
+        ))
+    }
+}
+
 /// Validate, schedule, evaluate rules, detect clashes, take off, mesh. Fails on invalid projects.
 pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Report, ReportError> {
-    let problems = project.validate();
-    if !problems.is_empty() {
-        return Err(ReportError::Invalid(
-            problems.iter().map(|e| e.to_string()).collect(),
-        ));
-    }
+    check(project)?;
     let schedule = bim_schedule::schedule(&project.phases)?;
+    let spans = bim_schedule::element_spans(project, &schedule)?;
+    let ix = ProjectIndex::new(project);
     let lines = bim_takeoff::takeoff(project);
     let by_phase = bim_takeoff::cost_by_phase(&lines);
     let phases = schedule
@@ -146,24 +160,25 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
         })
         .collect();
     let mut elements = Vec::with_capacity(project.elements.len());
-    for e in &project.elements {
+    // takeoff and spans are both in element order
+    for ((e, line), sp) in project.elements.iter().zip(&lines).zip(&spans) {
         // external-mesh elements have no parametric geometry but are still
         // scheduled and costed: keep them, with an empty mesh
-        let m = match bim_geom::mesh_for(project, e) {
+        let m = match bim_geom::mesh_for(&ix, e) {
             Ok(m) => m,
             Err(bim_geom::GeomError::NoGeometry(_)) => bim_geom::Mesh::default(),
             Err(err) => return Err(err.into()),
         };
-        let line = lines.iter().find(|l| l.element == e.id);
         elements.push(ElementOut {
             id: e.id,
             name: e.name.clone(),
             discipline: format!("{:?}", e.discipline),
             phase: e.phase.0,
-            start_day: schedule.element_start_day(e).unwrap_or(0),
-            cost_usd: line.map(|l| l.cost.dollars()).unwrap_or(0.0),
-            qty: line.map(|l| l.qty).unwrap_or(0.0),
-            unit: line.map(|l| format!("{:?}", l.unit)).unwrap_or_default(),
+            start_day: sp.start_day,
+            finish_day: sp.finish_day,
+            cost_usd: line.cost.dollars(),
+            qty: line.qty,
+            unit: format!("{:?}", line.unit),
             cost_code: e.cost_code.clone(),
             level: e.level.map(|l| l.0),
             positions: m.positions.iter().flat_map(|v| [v.x, v.y, v.z]).collect(),
@@ -207,6 +222,31 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
         None => ("none".into(), "no rule file".into(), "n/a".into(), vec![]),
     };
     let mut advisories = advisories;
+    // element tasks that run past their phase: one advisory per phase
+    for sp in &schedule.phases {
+        let late: Vec<u32> = project
+            .elements
+            .iter()
+            .zip(&spans)
+            .filter(|(e, s)| e.phase == sp.id && s.finish_day > sp.end_day)
+            .map(|(_, s)| s.finish_day)
+            .collect();
+        if let Some(last) = late.iter().max() {
+            advisories.push(bim_rules::Advisory::note(
+                "schedule.element_overrun",
+                bim_rules::Severity::Info,
+                project
+                    .phase(sp.id)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_default(),
+                format!(
+                    "{} element task(s) finish after the phase ends on day {} (latest day {last})",
+                    late.len(),
+                    sp.end_day
+                ),
+            ));
+        }
+    }
     // code analysis: story-level egress findings join the rule findings
     let top_y = elements
         .iter()
@@ -283,7 +323,7 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
             name: s.name.clone(),
             occupancy: format!("{:?}", s.occupancy),
             area_m2: s.area_m2(),
-            exits: bim_rules::egress_exits(project, s),
+            exits: bim_rules::egress_exits(&ix, s),
             level: s.level.map(|l| l.0),
             occupant_load: rules
                 .and_then(|rs| rs.occupant_factor(s.occupancy))
@@ -302,7 +342,8 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
         rule_set,
         code_edition,
         rules_verified,
-        total_days: schedule.total_days,
+        total_days: bim_schedule::project_finish(&schedule, &spans),
+        phase_days: schedule.total_days,
         total_cost_usd: lines.iter().map(|l| l.cost).sum::<Cents>().dollars(),
         phases,
         elements,
@@ -433,6 +474,42 @@ mod tests {
         assert_eq!(names, vec![("Level 1", 11, 1), ("Level 2", 0, 0)]);
         assert_eq!(r.spaces[0].level, Some(0));
         assert_eq!(r.elements.iter().filter(|e| e.level.is_none()).count(), 1); // the site ramp
+    }
+    #[test]
+    fn element_tasks_in_report() {
+        let mut p = Project::sample();
+        let r = build(&p, None).unwrap();
+        assert!(r.elements.iter().all(|e| e.finish_day == e.start_day));
+        assert_eq!((r.total_days, r.phase_days), (57, 57));
+        let fit = p
+            .elements
+            .iter()
+            .position(|e| e.name == "Rear exit")
+            .unwrap();
+        let wall = p
+            .elements
+            .iter()
+            .find(|e| e.name == "North wall")
+            .unwrap()
+            .id;
+        p.elements[fit].depends_on = vec![wall];
+        p.elements[fit].duration_days = Some(30); // fit-out starts day 37 -> 67 > 57
+        let r = build(&p, None).unwrap();
+        let e = &r.elements[fit];
+        assert_eq!((e.start_day, e.finish_day), (37, 67));
+        assert_eq!((r.total_days, r.phase_days), (67, 57));
+        assert!(r.phases.iter().all(|ph| ph.end_day <= 57), "CPM untouched");
+        let a = r
+            .advisories
+            .iter()
+            .find(|a| a.rule_id == "schedule.element_overrun")
+            .unwrap();
+        assert_eq!(a.subject, "Fit-out");
+        assert!(a.message.starts_with("1 element task(s)") && a.message.contains("day 67"));
+        let v: serde_json::Value =
+            serde_json::from_str(&build_json(&p.to_json().unwrap(), None).unwrap()).unwrap();
+        assert_eq!(v["elements"][fit]["finish_day"], 67);
+        assert_eq!(v["total_days"], 67);
     }
     #[test]
     fn invalid_project_is_error() {

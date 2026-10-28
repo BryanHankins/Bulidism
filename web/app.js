@@ -5,11 +5,15 @@ import { setLevelElevation } from './levels.js';
 import { buildBcf } from './bcf.js';
 import { costRows, perLabel, rateOut, rateIn, parseDollars, ratesToCsv, parseRatesCsv } from './costs.js';
 import { snapStep, lenToInput, parseLen, fmtLen, fmtArea, areaToInput, parseArea, qtyOut, convertMessage } from './units.js';
+import { kindOf, clickSelect, deleteElements, moveElements, copyElements, pasteElements, rectBounds, commonValue, dependsCycle } from './clipboard.js';
+import { createCloud, resetTokenFromHash } from './cloud.js';
 
 const $ = id => document.getElementById(id);
 // user-supplied strings (names, cost codes) go into innerHTML: always escape
 const esc = v => String(v).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
-let project = null, rules = null, rulesId = null, lastDay = 0, lastLevel = 'all', activeLevel = null, selectedId = null, placing = null, placeStart = null, lastReport = null;
+// sel: selected element ids (any number); clip: copied elements (deep copies) for Ctrl+V
+let project = null, rules = null, rulesId = null, lastDay = 0, lastLevel = 'all', activeLevel = null, sel = [], clip = null, placing = null, placeStart = null, lastReport = null;
+const one = () => sel.length === 1 ? sel[0] : null;
 const undoStack = [], redoStack = [];
 const store = { get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); return true; } catch (_) { return false; } } };
 // display units only; the engine stays metric
@@ -36,10 +40,12 @@ const lenInput = (attrs, m) => units === 'imperial'
   ? `<input ${attrs} type="text" inputmode="decimal" value="${esc(lenToInput(m, units))}">`
   : `<input ${attrs} type="number" step="0.05" value="${esc(lenToInput(m, units))}">`;
 const badLen = v => { $('runErr').textContent = `Could not read length "${v}"` + (units === 'imperial' ? ` — try 3'-6", 42" or 3.5'` : ''); };
-function snapshot() { if (project) { undoStack.push(JSON.stringify(project)); if (undoStack.length > 50) undoStack.shift(); redoStack.length = 0; updateUndo(); } }
+// one undo step per operation; `before` lets an operation decide after the fact whether it changed anything
+function snapshot(before) { if (project) { undoStack.push(before ?? JSON.stringify(project)); if (undoStack.length > 50) undoStack.shift(); redoStack.length = 0; updateUndo(); } }
 function updateUndo() { $('undo').disabled = !undoStack.length; $('redo').disabled = !redoStack.length; }
-function undo() { if (!undoStack.length) return; showImportNotes(); redoStack.push(JSON.stringify(project)); project = JSON.parse(undoStack.pop()); if (!project.elements.some(e => e.id === selectedId)) selectedId = null; updateUndo(); rerun(); }
-function redo() { if (!redoStack.length) return; showImportNotes(); undoStack.push(JSON.stringify(project)); project = JSON.parse(redoStack.pop()); updateUndo(); rerun(); }
+const pruneSel = () => { sel = sel.filter(id => project.elements.some(e => e.id === id)); };
+function undo() { if (!undoStack.length) return; showImportNotes(); redoStack.push(JSON.stringify(project)); project = JSON.parse(undoStack.pop()); pruneSel(); updateUndo(); rerun(); }
+function redo() { if (!redoStack.length) return; showImportNotes(); undoStack.push(JSON.stringify(project)); project = JSON.parse(redoStack.pop()); pruneSel(); updateUndo(); rerun(); }
 const step = () => snapStep(units);
 const snap = v => Math.round(v / step()) * step();
 
@@ -88,46 +94,107 @@ function rerun(keepDay = true) {
       : '<div class="row"><span>No spaces defined</span></div>';
     renderCodeSummary(report.code_summary);
     renderReadiness(report.readiness || []);
-    renderReport(report, { day: keepDay ? Math.min(lastDay, report.total_days) : 0, selected: selectedId, onClick: onViewClick, onMove: onViewMove, onHandle: onViewHandle, handlesFor, onDay: d => lastDay = d, level: lastLevel, onLevel: l => lastLevel = l, groundY: lvlY() });
+    renderReport(report, { day: keepDay ? Math.min(lastDay, report.total_days) : 0, selected: sel, onClick: onViewClick, onMove: onViewMove, onHandle: onViewHandle, handlesFor, onDay: d => lastDay = d, level: lastLevel, onLevel: l => lastLevel = l, groundY: lvlY(),
+      rectMode: () => placing === 'space', onRect: onViewRect, snapRect: v => Math.round(v / 0.5) * 0.5 });
     status(`ran in ${(performance.now()-t0).toFixed(1)} ms · schema v${bim.schema_version()}${rules ? '' : ` · no rule file for '${project.rule_set}', advisories skipped`}${notice}`);
     notice = '';
   } catch (e) {
     $('runErr').textContent = String(e);
   }
-  renderEditor(); renderProps(); renderSpaces(); renderCosts(); renderLevels(); renderBuilding(); $('jsonBox').value = JSON.stringify(project, null, 2);
+  renderEditor(); renderProps(); renderSpaces(); renderCosts(); renderLevels(); renderBuilding(); renderRuleSets(); renderCloud(); $('jsonBox').value = JSON.stringify(project, null, 2);
   autosave();
+}
+
+// ---- rule set: rules/index.json lists what ships; the project's own id is always offered ----
+let ruleIndex = null;
+async function loadRuleIndex() {
+  try { const r = await fetch('rules/index.json'); if (r.ok) ruleIndex = await r.json(); } catch (_) { /* static copy without an index */ }
+  if (!Array.isArray(ruleIndex)) ruleIndex = [];
+  renderRuleSets();
+}
+function renderRuleSets() {
+  if (!project) return;
+  const list = [...(ruleIndex || [])];
+  if (!list.some(r => r.id === project.rule_set)) list.push({ id: project.rule_set, name: `${project.rule_set} (no listing)` });
+  $('ruleSetEdit').innerHTML = `<label class="chk">Rule set<select id="ruleSet">${list.map(r => `<option value="${esc(r.id)}" ${r.id === project.rule_set ? 'selected' : ''}>${esc(r.name || r.id)}</option>`).join('')}</select></label>`;
+  $('ruleSet').onchange = ev => { snapshot(); project.rule_set = ev.target.value; notice = ` · rule set ${project.rule_set}`; rerun(); };
 }
 
 
 // ---- selection + property editing ----
 const NUMERIC = { Wall:['height','thickness'], Slab:['size_x','size_z','thickness'], Column:['width','depth','height'], Beam:['width','depth'], Door:['offset','width','height'], Stair:['run_length','total_rise','width','riser_count'], Ramp:['run_length','rise','width'], Mesh:[] };
 const VEC = { Wall:['start','end'], Slab:['origin'], Column:['base'], Beam:['start','end'], Stair:['base'], Ramp:['base'], Mesh:['origin'], Door:[] };
-function selectedEl(){ return project.elements.find(e => e.id === selectedId) || null; }
+const DISCIPLINES = ['Architectural','Structural','Mechanical','Electrical','Plumbing','Site'];
+const selectedEls = () => { const s = new Set(sel); return project.elements.filter(e => s.has(e.id)); };
+/** Change the selection (viewer highlight, property panel, element list) without re-running the engine. */
+function select(ids) { sel = ids; if (window.__viewer) window.__viewer.highlight(sel); renderProps(); renderElementList(); }
 function renderProps() {
-  const e = selectedEl(); $('selPanel').hidden = !e; if (!e) return;
-  const kind = Object.keys(e.kind)[0], k = e.kind[kind];
+  const els = selectedEls(); $('selPanel').hidden = !els.length; if (!els.length) return;
+  $('selTitle').textContent = els.length === 1 ? 'Selected' : `${els.length} elements selected`;
+  if (els.length > 1) return renderMultiProps(els);
+  const e = els[0];
+  const kind = kindOf(e), k = e.kind[kind];
   const phases = project.phases.map(p => `<option value="${p.id}" ${p.id===e.phase?'selected':''}>${esc(p.name)}</option>`).join('');
-  let h = `<label class="full">Name<input name="name" value="${esc(e.name)}"></label><label>Phase<select name="phase">${phases}</select></label><label>Offset days<input name="start_offset_days" type="number" min="0" value="${e.start_offset_days||0}"></label><label>Cost code<input name="cost_code" list="costCodes" value="${esc(e.cost_code)}"></label><label>Discipline<select name="discipline">${['Architectural','Structural','Mechanical','Electrical','Plumbing','Site'].map(d=>`<option ${d===e.discipline?'selected':''}>${d}</option>`).join('')}</select></label><label>Level<select name="level">${levelOptions(e.level)}</select></label>`;
+  let h = `<label class="full">Name<input name="name" value="${esc(e.name)}"></label><label>Phase<select name="phase">${phases}</select></label><label>Offset days<input name="start_offset_days" type="number" min="0" value="${e.start_offset_days||0}"></label><label>Cost code<input name="cost_code" list="costCodes" value="${esc(e.cost_code)}"></label><label>Discipline<select name="discipline">${DISCIPLINES.map(d=>`<option ${d===e.discipline?'selected':''}>${d}</option>`).join('')}</select></label><label>Level<select name="level">${levelOptions(e.level)}</select></label>`;
   for (const v of VEC[kind]) h += ['x','y','z'].map((ax,i) => `<label>${v} ${ax}${lenInput(`name="${v}.${i}"`, k[v][i])}</label>`).join('');
   for (const n of NUMERIC[kind]) h += isLen(n) ? `<label>${n}${lenInput(`name="${n}"`, k[n])}</label>` : `<label>${n}<input name="${n}" type="number" step="1" value="${k[n]}"></label>`;
   if (kind === 'Door') h += `<label>egress<select name="is_egress"><option value="1" ${k.is_egress?'selected':''}>yes</option><option value="" ${!k.is_egress?'selected':''}>no</option></select></label>`;
+  // element-level schedule: own duration and predecessors (engine: depends_on / duration_days)
+  const byId = new Map(project.elements.map(x => [x.id, x])), deps = e.depends_on || [];
+  const label = x => `${esc(x.name)} (${kindOf(x)})`;
+  const others = project.elements.filter(x => x.id !== e.id && !deps.includes(x.id) && !dependsCycle(project, e.id, x.id));
+  h += `<label>Duration days<input name="duration_days" type="number" min="0" step="1" placeholder="none" value="${e.duration_days ?? ''}"></label>
+    <div class="full" style="font-size:11px;color:var(--muted)">Depends on${deps.length ? '' : ': nothing'}
+    ${deps.map(d => `<div class="el"><span>${byId.has(d) ? label(byId.get(d)) : esc(d)}</span><button type="button" data-undep="${esc(d)}" title="Remove dependency">✕</button></div>`).join('')}
+    <select id="depAdd" style="width:100%;margin-top:4px"><option value="">+ add predecessor…</option>${others.map(x => `<option value="${esc(x.id)}">${label(x)}</option>`).join('')}</select></div>`;
   $('propForm').innerHTML = h;
-  $('propForm').querySelectorAll('input,select').forEach(inp => inp.onchange = () => {
+  $('propForm').querySelectorAll('input[name],select[name]').forEach(inp => inp.onchange = () => {
     const n = inp.name, val = inp.value;
     const len = (n.includes('.') || (n in k && isLen(n) && n !== 'is_egress')) ? parseLen(val, units) : null;
     if (Number.isNaN(len)) { badLen(val); renderProps(); return; }
     snapshot();
     if (n === 'name' || n === 'cost_code' || n === 'discipline') e[n] = val;
     else if (n === 'phase' || n === 'start_offset_days') e[n] = +val;
+    else if (n === 'duration_days') { if (val.trim() === '') delete e.duration_days; else e.duration_days = Math.max(0, Math.round(+val) || 0); }
     else if (n === 'level') e.level = val === '' ? null : +val;
     else if (n === 'is_egress') k.is_egress = !!val;
     else if (n.includes('.')) { const [v,i] = n.split('.'); k[v][+i] = len; }
     else k[n] = n === 'riser_count' ? Math.max(1, Math.round(+val)) : len;
     rerun();
   });
+  $('depAdd').onchange = ev => { const d = ev.target.value; if (!d) return; snapshot(); e.depends_on = [...deps, d]; rerun(); };
+  $('propForm').querySelectorAll('[data-undep]').forEach(b => b.onclick = () => { snapshot(); e.depends_on = deps.filter(d => d !== b.dataset.undep); if (!e.depends_on.length) delete e.depends_on; rerun(); });
 }
-$('delSel').onclick = () => { const id = selectedId; if (!id) return; snapshot(); project.elements = project.elements.filter(e => e.id !== id && !(e.kind.Door && e.kind.Door.host === id)); project.spaces.forEach(s => s.egress_doors = s.egress_doors.filter(d => project.elements.some(e => e.id === d))); selectedId = null; rerun(); };
-$('deselect').onclick = () => { selectedId = null; window.__viewer.highlight(null); renderProps(); };
+// several selected: only the fields they can share; a differing value shows as "(mixed)" and is left alone
+function renderMultiProps(els) {
+  const ph = commonValue(els, 'phase'), dc = commonValue(els, 'discipline'), lv = commonValue(els, 'level'), cc = commonValue(els, 'cost_code');
+  const mixed = v => v === undefined ? '<option value="__mixed" selected>(mixed)</option>' : '';
+  const levelSel = lv === undefined ? mixed(lv) + levelOptions(Symbol()) : levelOptions(lv);
+  $('propForm').innerHTML = `<label>Phase<select name="phase">${mixed(ph)}${project.phases.map(p => `<option value="${p.id}" ${p.id===ph?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>
+    <label>Discipline<select name="discipline">${mixed(dc)}${DISCIPLINES.map(d => `<option ${d===dc?'selected':''}>${d}</option>`).join('')}</select></label>
+    <label>Level<select name="level">${levelSel}</select></label>
+    <label>Cost code<input name="cost_code" list="costCodes" value="${esc(cc ?? '')}" placeholder="${cc === undefined ? '(mixed)' : ''}"></label>`;
+  $('propForm').querySelectorAll('[name]').forEach(inp => inp.onchange = () => {
+    const n = inp.name, val = inp.value;
+    if (val === '__mixed' || (n === 'cost_code' && val.trim() === '' && cc === undefined)) return;
+    snapshot();
+    for (const e of els) e[n] = n === 'phase' ? +val : n === 'level' ? (val === '' ? null : +val) : val;
+    rerun();
+  });
+}
+function deleteSelected() { if (!sel.length) return; snapshot(); const n = deleteElements(project, sel); sel = []; notice = ` · deleted ${n} element${n === 1 ? '' : 's'}`; rerun(); }
+// clipboard: in-page; each paste lands +1 m in X and Z from the last, snapped to the display grid
+function copySel() { if (!sel.length) return false; clip = copyElements(project, sel); status(`copied ${clip.length} element${clip.length === 1 ? '' : 's'}`); return true; }
+function paste() {
+  if (!clip || !clip.length) return;
+  const before = JSON.stringify(project), out = pasteElements(project, clip, { uuid, dx: 1, dz: 1, snap });
+  if (!out.length) { status('nothing to paste: the copied doors\' walls no longer exist'); return; }
+  snapshot(before); clip = JSON.parse(JSON.stringify(out)); sel = out.map(e => e.id);
+  notice = ` · pasted ${out.length} element${out.length === 1 ? '' : 's'}`; rerun();
+}
+$('delSel').onclick = deleteSelected;
+$('dupSel').onclick = () => { if (copySel()) paste(); };
+$('deselect').onclick = () => select([]);
 function selectTab(t){ document.querySelectorAll('.tabs .btn').forEach(x => x.setAttribute('aria-selected', x.dataset.tab === t)); document.querySelectorAll('.pane').forEach(p => p.hidden = p.id !== 'pane-' + t); }
 
 // ---- endpoint handles ----
@@ -154,9 +221,11 @@ function onViewHandle(id, idx, x, z) {
 
 // ---- spaces ----
 const OCCUPANCIES = ['Assembly','Business','Educational','Residential','Mercantile','Storage','Institutional'];
+// occupancy for new spaces (+ space and the drag tool), remembered per browser
+let spaceOcc = OCCUPANCIES.includes(store.get('buildsim.spaceOcc')) ? store.get('buildsim.spaceOcc') : 'Business';
 function renderSpaces() {
   const doors = project.elements.filter(e => e.kind.Door);
-  $('spaceEdit').innerHTML = project.spaces.map((s, i) => {
+  $('spaceEdit').innerHTML = `<label class="chk" style="font-size:12px">New spaces are<select id="spaceOcc">${OCCUPANCIES.map(o => `<option ${o === spaceOcc ? 'selected' : ''}>${o}</option>`).join('')}</select></label>` + project.spaces.map((s, i) => {
     const opts = OCCUPANCIES.map(o => `<option ${o === s.occupancy ? 'selected' : ''}>${o}</option>`).join('');
     const exits = doors.map(d => `<label style="display:block;font-size:12px"><input type="checkbox" data-sp="${i}" data-door="${d.id}" ${s.egress_doors.includes(d.id) ? 'checked' : ''}> ${esc(d.name)}${d.kind.Door.is_egress ? '' : ' (not egress)'}</label>`).join('') || '<small style="color:var(--muted)">no doors yet</small>';
     const b = s.bounds;
@@ -186,7 +255,8 @@ function renderSpaces() {
     rerun();
   });
   $('spaceEdit').querySelectorAll('[data-del]').forEach(b => b.onclick = () => { snapshot(); project.spaces.splice(+b.dataset.del, 1); rerun(); });
-  $('addSpace').onclick = () => { snapshot(); project.spaces.push({ name: `Space ${project.spaces.length+1}`, occupancy: 'Business', floor_area_m2: 50, egress_doors: [], bounds: null }); rerun(); };
+  $('addSpace').onclick = () => { snapshot(); project.spaces.push({ name: `Space ${project.spaces.length+1}`, occupancy: spaceOcc, floor_area_m2: 50, egress_doors: [], bounds: null, level: currentLevel()?.id ?? null }); rerun(); };
+  $('spaceOcc').onchange = ev => { spaceOcc = ev.target.value; store.set('buildsim.spaceOcc', spaceOcc); };
 }
 $('showSpaces').onchange = e => window.__viewer.setSpacesVisible(e.target.checked);
 
@@ -232,24 +302,26 @@ $('ratesFile').onchange = async ev => {
 };
 
 // ---- click-to-place ----
-function setPlacing(mode){ placing = mode; placeStart = null; window.__viewer.setMarker(null); $('placeMsg').textContent = mode === 'wall' ? 'click start point' : mode === 'column' ? 'click position' : mode === 'door' ? 'click a wall' : ''; document.body.style.cursor = mode ? 'crosshair' : ''; }
+const PLACE_MSG = { wall: 'click start point', column: 'click position', door: 'click a wall', space: 'drag a rectangle on the floor (0.5 m grid; Esc cancels)' };
+function setPlacing(mode){ placing = mode; placeStart = null; if (window.__viewer) window.__viewer.setMarker(null); $('placeMsg').textContent = PLACE_MSG[mode] || ''; document.body.style.cursor = mode ? 'crosshair' : ''; }
 $('placeWall').onclick = () => setPlacing(placing === 'wall' ? null : 'wall');
 $('placeCol').onclick = () => setPlacing(placing === 'column' ? null : 'column');
 $('placeDoor').onclick = () => setPlacing(placing === 'door' ? null : 'door');
+$('placeSpace').onclick = () => setPlacing(placing === 'space' ? null : 'space');
 
-// Drag a selected element in plan; deltas arrive in world metres.
-function onViewMove(id, dx, dz) {
-  const e = project.elements.find(x => x.id === id); if (!e) return;
-  const kind = Object.keys(e.kind)[0], k = e.kind[kind];
-  const w = kind === 'Door' && project.elements.find(x => x.id === k.host);
-  if (kind === 'Door' && !w) return;
+// Drag the selection in plan; deltas arrive in world metres. One undo step for the whole move.
+function onViewMove(ids, dx, dz) {
+  const before = JSON.stringify(project);
+  if (!moveElements(project, ids, dx, dz, snap)) return;
+  snapshot(before); rerun();
+}
+// Space tool: the dragged rectangle (already on the 0.5 m grid) becomes a space on the active level.
+function onViewRect(a, b) {
+  const bounds = rectBounds(a, b);
+  if (!bounds) { $('placeMsg').textContent = 'too small — drag at least 0.5 m each way (Esc cancels)'; return; }
   snapshot();
-  if (kind === 'Door') {
-    const [sx,,sz] = w.kind.Wall.start, [ex,,ez] = w.kind.Wall.end, len = Math.hypot(ex-sx, ez-sz) || 1;
-    const along = ((dx*(ex-sx)) + (dz*(ez-sz))) / len;
-    k.offset = Math.max(0, Math.min(len - k.width, snap(k.offset + along)));
-  } else for (const v of VEC[kind]) { k[v][0] = snap(k[v][0] + dx); k[v][2] = snap(k[v][2] + dz); }
-  rerun();
+  project.spaces.push({ name: `Space ${project.spaces.length + 1}`, occupancy: spaceOcc, floor_area_m2: bounds[2] * bounds[3], egress_doors: [], bounds, level: currentLevel()?.id ?? null });
+  setPlacing(null); notice = ` · added ${project.spaces[project.spaces.length - 1].name}`; rerun();
 }
 
 // Exports built from the report the wasm just produced.
@@ -274,6 +346,11 @@ $('exportBcf').onclick = () => {
   a.download = `${project.name.replace(/\W+/g, '_')}_issues.bcfzip`; a.click();
   status(`exported ${topics.length} BCF issue${topics.length === 1 ? '' : 's'}`);
 };
+// binary exports straight from the engine (feature-detected at startup)
+function engineExport(fn, name, type) {
+  try { download(name, bim[fn](JSON.stringify(project)), type); } catch (e) { $('runErr').textContent = `${name}: ${e}`; }
+}
+$('exportXlsx').onclick = () => engineExport('takeoff_xlsx', 'takeoff.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
 $('printReport').onclick = () => {
   if (!lastReport) return;
   const w = window.open('', '_blank');
@@ -282,8 +359,8 @@ $('printReport').onclick = () => {
 };
 $('exportHtml').onclick = async () => {
   if (!lastReport) return;
-  const [shell, css, js, three] = await Promise.all(['report_shell.html','viewer.css','viewer.js','three.r128.min.js'].map(f => fetch(f).then(r => r.text())));
-  const page = shell.replace('/*__CSS__*/', () => css).replace('/*__THREE__*/', () => three).replace('/*__VIEWER__*/', () => js)
+  const [shell, css, js, three, cites] = await Promise.all(['report_shell.html','viewer.css','viewer.js','three.r128.min.js','cites.js'].map(f => fetch(f).then(r => r.text())));
+  const page = shell.replace('/*__CSS__*/', () => css).replace('/*__CITES__*/', () => cites).replace('/*__THREE__*/', () => three).replace('/*__VIEWER__*/', () => js)
     .replace('/*__DATA__*/', () => JSON.stringify(lastReport).replace(/</g, '\\u003c'));
   download(`${project.name.replace(/\W+/g,'_')}_report.html`, page, 'text/html');
 };
@@ -291,14 +368,19 @@ $('undo').onclick = undo; $('redo').onclick = redo;
 document.addEventListener('keydown', ev => {
   const typing = ['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName);
   if (ev.key === 'Escape') setPlacing(null);
-  if (ev.key === 'Delete' && selectedId && !typing) $('delSel').onclick();
+  if (ev.key === 'Delete' && sel.length && !typing) deleteSelected();
   if ((ev.ctrlKey || ev.metaKey) && !typing) {
-    if (ev.key === 'z' && !ev.shiftKey) { ev.preventDefault(); undo(); }
-    if (ev.key === 'y' || (ev.key === 'z' && ev.shiftKey)) { ev.preventDefault(); redo(); }
+    const key = ev.key.toLowerCase();
+    if (key === 'z' && !ev.shiftKey) { ev.preventDefault(); undo(); }
+    if (key === 'y' || (key === 'z' && ev.shiftKey)) { ev.preventDefault(); redo(); }
+    // only claim copy when elements are selected, so copying page text still works
+    if (key === 'c' && sel.length) { ev.preventDefault(); copySel(); }
+    if (key === 'v' && clip) { ev.preventDefault(); paste(); }
+    if (key === 'd') { ev.preventDefault(); if (copySel()) paste(); }
   }
 });
 function newEl(name, kind, disc, code){ const ph = project.phases[project.phases.length-1]; return { id: uuid(), name, kind, discipline: disc, phase: ph ? ph.id : 0, start_offset_days: 0, lod: 'Lod200', cost_code: code, material: '', level: currentLevel()?.id ?? null }; }
-function onViewClick({ id, point, ground }) {
+function onViewClick({ id, point, ground, toggle }) {
   if (placing === 'door') {
     const w = id && project.elements.find(e => e.id === id && e.kind.Wall);
     if (!w || !point) { $('placeMsg').textContent = 'that is not a wall — click a wall (Esc cancels)'; return; }
@@ -307,18 +389,19 @@ function onViewClick({ id, point, ground }) {
     const width = 0.9, offset = Math.max(0, Math.min(len - width, snap(along - width/2)));
     snapshot();
     const e = newEl(`Door ${project.elements.length+1}`, { Door: { host: w.id, offset, width, height: 2.1, is_egress: true } }, 'Architectural', 'C1020');
-    project.elements.push(e); selectedId = e.id; setPlacing(null); rerun(); return;
+    project.elements.push(e); sel = [e.id]; setPlacing(null); rerun(); return;
   }
+  if (placing === 'space') return; // the space tool drags; a plain click does nothing
   if (placing && ground) {
     const [x, z] = [snap(ground[0]), snap(ground[1])];
-    if (placing === 'column') { snapshot(); const e = newEl(`Column ${project.elements.length+1}`, { Column: { base:[x,lvlY(),z], width:0.4, depth:0.4, height:3.2 } }, 'Structural', 'B1010'); project.elements.push(e); selectedId = e.id; rerun(); return; }
+    if (placing === 'column') { snapshot(); const e = newEl(`Column ${project.elements.length+1}`, { Column: { base:[x,lvlY(),z], width:0.4, depth:0.4, height:3.2 } }, 'Structural', 'B1010'); project.elements.push(e); sel = [e.id]; rerun(); return; }
     if (!placeStart) { placeStart = [x, z]; window.__viewer.setMarker(placeStart); $('placeMsg').textContent = 'click end point (Esc cancels)'; return; }
     if (Math.hypot(x - placeStart[0], z - placeStart[1]) < step()) return;
     snapshot();
     const e = newEl(`Wall ${project.elements.length+1}`, { Wall: { start:[placeStart[0],lvlY(),placeStart[1]], end:[x,lvlY(),z], height:3.0, thickness:0.25 } }, 'Architectural', 'B2010');
-    project.elements.push(e); selectedId = e.id; setPlacing(null); rerun(); return;
+    project.elements.push(e); sel = [e.id]; setPlacing(null); rerun(); return;
   }
-  selectedId = id; window.__viewer.highlight(id); renderProps(); if (id) selectTab('edit');
+  select(clickSelect(sel, id, toggle)); if (sel.length) selectTab('edit');
 }
 
 
@@ -396,9 +479,7 @@ function renderEditor() {
   $('phaseEdit').querySelectorAll('input[data-dep]').forEach(cb => cb.onchange = () => { snapshot(); const p = project.phases[+cb.dataset.ph], d = +cb.dataset.dep; p.depends_on = cb.checked ? [...new Set([...p.depends_on, d])] : p.depends_on.filter(x => x !== d); rerun(); });
   $('phaseEdit').querySelectorAll('[data-delph]').forEach(b => b.onclick = () => { if (project.phases.length < 2) { $('runErr').textContent = 'A project needs at least one phase.'; return; } snapshot(); const id = project.phases[+b.dataset.delph].id; project.phases = project.phases.filter(p => p.id !== id); project.phases.forEach(p => p.depends_on = p.depends_on.filter(d => d !== id)); const first = project.phases[0]; project.elements.forEach(e => { if (e.phase === id && first) e.phase = first.id; }); rerun(); });
   $('addPhase').onclick = () => { snapshot(); const last = project.phases[project.phases.length-1]; const id = project.phases.reduce((m, p) => Math.max(m, p.id), -1) + 1; project.phases.push({ id, name: `Phase ${id+1}`, duration_days: 10, depends_on: last ? [last.id] : [] }); rerun(); };
-  $('elements').innerHTML = project.elements.map((e, i) => `<div class="el" data-id="${e.id}" style="cursor:pointer${e.id===selectedId?';color:var(--accent)':''}"><span>${esc(e.name)} <small style="color:var(--muted)">${Object.keys(e.kind)[0]} · ph${e.phase}</small></span><button data-i="${i}" title="delete">✕</button></div>`).join('');
-  $('elements').querySelectorAll('.el').forEach(d => d.onclick = ev => { if (ev.target.tagName === 'BUTTON') return; selectedId = d.dataset.id; window.__viewer.highlight(selectedId); renderProps(); renderEditor(); });
-  $('elements').querySelectorAll('button').forEach(b => b.onclick = () => { snapshot(); const id = project.elements[+b.dataset.i].id; project.elements = project.elements.filter(e => e.id !== id && !(e.kind.Door && e.kind.Door.host === id)); project.spaces.forEach(s => s.egress_doors = s.egress_doors.filter(d => project.elements.some(e => e.id === d))); rerun(); });
+  renderElementList();
   function renderFields() {
     const k = KINDS[kindSel.value]; const phases = project.phases.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
     $('fields').innerHTML = `<label>Name<input name="name" value="${kindSel.value} ${project.elements.length+1}"></label><label>Phase<select name="phase">${phases}</select></label>` +
@@ -406,6 +487,14 @@ function renderEditor() {
         def === 'bool' ? `<label>${lbl}<select name="${n}"><option value="1">yes</option><option value="">no</option></select></label>` :
         isLen(n) ? `<label>${lbl}${lenInput(`name="${n}"`, def)}</label>` : `<label>${lbl}<input name="${n}" type="number" step="1" value="${def}"></label>`).join('');
   }
+}
+
+// element list: click selects, Shift/Ctrl/Cmd+click toggles
+function renderElementList() {
+  const on = new Set(sel);
+  $('elements').innerHTML = project.elements.map((e, i) => `<div class="el" data-id="${esc(e.id)}" style="cursor:pointer${on.has(e.id)?';color:var(--accent);font-weight:600':''}"><span>${esc(e.name)} <small style="color:var(--muted)">${kindOf(e)} · ph${e.phase}</small></span><button data-i="${i}" title="delete">✕</button></div>`).join('');
+  $('elements').querySelectorAll('.el').forEach(d => d.onclick = ev => { if (ev.target.tagName === 'BUTTON') return; select(clickSelect(sel, d.dataset.id, ev.shiftKey || ev.ctrlKey || ev.metaKey)); });
+  $('elements').querySelectorAll('button').forEach(b => b.onclick = () => { snapshot(); const id = project.elements[+b.dataset.i].id; deleteElements(project, [id]); pruneSel(); rerun(); });
 }
 
 $('addForm').onsubmit = ev => {
@@ -419,7 +508,7 @@ $('addForm').onsubmit = ev => {
   project.elements.push({ id: uuid(), name: f.name, kind: k.build(f), discipline: k.disc, phase: +fd.get('phase'), start_offset_days: 0, lod: 'Lod200', cost_code: k.code, material: '', level: currentLevel()?.id ?? null });
   rerun();
 };
-$('apply').onclick = () => { try { const p = JSON.parse($('jsonBox').value); const v = JSON.parse(bim.validate(JSON.stringify(p))); $('jsonMsg').textContent = v.join('\n'); if (!v.length) { snapshot(); project = p; rerun(); } } catch (e) { $('jsonMsg').textContent = String(e); } };
+$('apply').onclick = () => { try { const p = JSON.parse($('jsonBox').value); const v = JSON.parse(bim.validate(JSON.stringify(p))); $('jsonMsg').textContent = v.join('\n'); if (!v.length) { snapshot(); project = p; pruneSel(); rerun(); } } catch (e) { $('jsonMsg').textContent = String(e); } };
 $('jsonBox').oninput = () => { try { $('jsonMsg').textContent = JSON.parse(bim.validate($('jsonBox').value)).join('\n'); } catch (e) { $('jsonMsg').textContent = String(e); } };
 $('save').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' })); a.download = `${project.name.replace(/\W+/g,'_')}.json`; a.click(); };
 $('open').onclick = () => $('file').click();
@@ -431,14 +520,14 @@ $('file').onchange = async ev => {
     if (/\.ifc$/i.test(f.name) || text.trimStart().startsWith('ISO-10303-21')) {
       status(`importing ${f.name}…`);
       const r = JSON.parse(bim.import_ifc(text, f.name.replace(/\.[^.]+$/, '')));
-      snapshot(); project = r.project; selectedId = null;
+      snapshot(); project = r.project; sel = []; setCloudLink(null);
       showImportNotes(f.name, r.notes);
       rerun(false);
       return;
     }
     const p = JSON.parse(text); const v = JSON.parse(bim.validate(JSON.stringify(p)));
     if (v.length) throw new Error(v.join('\n'));
-    snapshot(); project = p; selectedId = null; showImportNotes(); rerun(false);
+    snapshot(); project = p; sel = []; setCloudLink(null); showImportNotes(); rerun(false);
   } catch (e) { $('runErr').textContent = String(e); }
 };
 function showImportNotes(name, notes) {
@@ -448,8 +537,126 @@ function showImportNotes(name, notes) {
   box.innerHTML = `<div style="display:flex;justify-content:space-between;gap:8px"><b>Imported ${esc(name)}</b><button class="btn" id="closeNotes" title="Dismiss">✕</button></div><ul style="margin:4px 0 0;padding-left:18px">${notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`;
   $('closeNotes').onclick = () => { box.hidden = true; };
 }
-$('new').onclick = () => { const name = prompt('Project name', 'New project'); if (!name) return; snapshot(); project = JSON.parse(bim.new_project(name, 'IN-2026')); showImportNotes(); rerun(false); };
+$('new').onclick = () => { const name = prompt('Project name', 'New project'); if (!name) return; snapshot(); project = JSON.parse(bim.new_project(name, project?.rule_set || 'IN-2026')); sel = []; setCloudLink(null); showImportNotes(); rerun(false); };
 document.querySelectorAll('.tabs .btn').forEach(b => b.onclick = () => selectTab(b.dataset.tab));
+
+// ---- cloud projects (only when an API answers /api/health; static hosting never shows this) ----
+const cloud = createCloud();
+let cloudOn = false, cloudUser = null, cloudList = null, cloudShares = null, cloudConflict = false, cloudMsg = '';
+// signed-out views: 'auth' (sign in / create), 'forgot' (request a reset email), 'reset' (new password from the emailed link)
+let cloudView = 'auth', cloudInfo = '';
+let resetToken = null;
+// reads an emailed `#reset=<token>` link (on load, or pasted into an already-open tab) and keeps the
+// one-time token out of the address bar, history and bookmarks
+function takeResetLink() {
+  const t = resetTokenFromHash(location.hash); if (!t) return false;
+  try { history.replaceState(null, '', location.pathname + location.search); } catch (_) { /* file:// etc. */ }
+  resetToken = t; cloudView = 'reset'; cloudMsg = cloudInfo = ''; return true;
+}
+takeResetLink();
+addEventListener('hashchange', () => { if (takeResetLink() && cloudOn) { cloudUser = null; selectTab('cloud'); renderCloud(); } });
+const CLOUD_LINK_KEY = 'buildsim.cloud.link';
+// the cloud project the open model was loaded from / saved to: {id, name, role, updated_at}
+let cloudLink = (() => { try { return JSON.parse(store.get(CLOUD_LINK_KEY)) || null; } catch (_) { return null; } })();
+function setCloudLink(l) { cloudLink = l; cloudConflict = false; cloudShares = null; store.set(CLOUD_LINK_KEY, JSON.stringify(l)); }
+async function initCloud() {
+  if (!(await cloud.health())) return; // no API: keep the tab hidden
+  cloudOn = true; document.querySelector('.tabs [data-tab="cloud"]').hidden = false;
+  if (resetToken) { selectTab('cloud'); renderCloud(); return; }
+  if (cloud.signedIn) { try { const u = await cloud.me(); cloudUser = u.user || u; await refreshCloud(); } catch (_) { cloudUser = null; } }
+  renderCloud();
+}
+async function cloudDo(fn, ok) {
+  cloudMsg = ''; cloudInfo = '';
+  try { await fn(); if (ok && !cloudConflict) cloudMsg = ok; }
+  catch (e) { if (e.status === 401) cloudUser = null; cloudMsg = cloudErrorText(e); }
+  renderCloud();
+}
+function cloudErrorText(e) {
+  if (e.rateLimited) { const m = Math.max(1, Math.ceil((e.retryAfter || 60) / 60)); return `Too many attempts. Try again in ${m} minute${m === 1 ? '' : 's'}.`; }
+  if (e.status === 503) return 'Password reset is not set up on this server. Ask the administrator to configure email.';
+  return String(e.message || e);
+}
+async function refreshCloud() {
+  cloudList = await cloud.list();
+  cloudShares = cloudLink && cloudLink.role === 'owner' ? await cloud.shares(cloudLink.id).catch(() => null) : null;
+}
+function openCloudData(r) {
+  const v = JSON.parse(bim.validate(JSON.stringify(r.data)));
+  if (v.length) throw new Error(`cloud project does not validate:\n${v.join('\n')}`);
+  snapshot(); project = r.data; sel = []; showImportNotes();
+  setCloudLink({ id: r.id, name: r.name, role: r.role, updated_at: r.updated_at });
+  rerun(false);
+}
+async function cloudSave(force) {
+  cloudConflict = false;
+  const r = await cloud.save(cloudLink.id, { name: project.name, data: project, updated_at: force ? undefined : cloudLink.updated_at })
+    .catch(e => { if (e.conflict) { cloudConflict = true; return null; } throw e; });
+  if (!r) { cloudMsg = ''; return; }
+  setCloudLink({ ...cloudLink, name: r.name, role: r.role || cloudLink.role, updated_at: r.updated_at });
+  await refreshCloud();
+}
+function renderCloud() {
+  const box = $('cloudPane'); if (!box || !cloudOn) return;
+  const msg = (cloudMsg ? `<div class="err">${esc(cloudMsg)}</div>` : '') + (cloudInfo ? `<div style="font-size:13px;margin-top:6px">${esc(cloudInfo)}</div>` : '');
+  if (!cloudUser && cloudView === 'reset') {
+    box.innerHTML = `<h2>Choose a new password</h2><form class="add" id="cloudReset"><label class="full">New password<input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
+      <label class="full">Repeat it<input name="again" type="password" autocomplete="new-password" minlength="8" required></label>
+      <button class="btn" type="submit">Set password</button><button class="btn" type="button" id="cloudBack">Cancel</button></form>${msg}`;
+    // cancelling a link opened in a signed-in tab returns to that session
+    $('cloudBack').onclick = () => { resetToken = null; cloudView = 'auth';
+      cloudDo(async () => { if (cloud.signedIn) { const u = await cloud.me(); cloudUser = u.user || u; await refreshCloud(); } }); };
+    $('cloudReset').onsubmit = ev => { ev.preventDefault(); const f = new FormData(ev.target);
+      if (f.get('password') !== f.get('again')) { cloudMsg = 'The two passwords differ.'; renderCloud(); return; }
+      cloudDo(async () => { await cloud.confirmReset(resetToken, f.get('password')); resetToken = null; cloudView = 'auth'; })
+        .then(() => { if (!cloudMsg) { cloudInfo = 'Password changed and every device signed out. Sign in with your new password.'; renderCloud(); } }); };
+    return;
+  }
+  if (!cloudUser && cloudView === 'forgot') {
+    box.innerHTML = `<h2>Reset your password</h2><form class="add" id="cloudForgot"><label class="full">Email<input name="email" type="email" autocomplete="username" required></label>
+      <button class="btn" type="submit">Email me a reset link</button><button class="btn" type="button" id="cloudBack">Back to sign in</button></form>${msg}`;
+    $('cloudBack').onclick = () => { cloudView = 'auth'; cloudMsg = cloudInfo = ''; renderCloud(); };
+    $('cloudForgot').onsubmit = ev => { ev.preventDefault(); const email = new FormData(ev.target).get('email');
+      cloudDo(async () => { await cloud.requestReset(email); cloudView = 'auth'; })
+        .then(() => { if (!cloudMsg) { cloudInfo = `If an account exists for ${email}, a reset link is on its way. It works once, for 60 minutes.`; renderCloud(); } }); };
+    return;
+  }
+  if (!cloudUser) {
+    box.innerHTML = `<h2>Cloud projects</h2><form class="add" id="cloudAuth"><label class="full">Email<input name="email" type="email" autocomplete="username" required></label>
+      <label class="full">Password<input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="btn" type="submit" data-act="login">Sign in</button><button class="btn" type="submit" data-act="register">Create account</button>
+      <button class="btn full" type="button" id="cloudForgotLink" style="border:0;background:none;color:var(--muted);text-decoration:underline">Forgot password?</button></form>${msg}`;
+    $('cloudForgotLink').onclick = () => { cloudView = 'forgot'; cloudMsg = cloudInfo = ''; renderCloud(); };
+    let act = 'login'; box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { act = b.dataset.act; });
+    $('cloudAuth').onsubmit = ev => { ev.preventDefault(); const f = new FormData(ev.target);
+      cloudDo(async () => { cloudUser = await cloud[act](f.get('email'), f.get('password')); await refreshCloud(); }); };
+    return;
+  }
+  const L = cloudLink, canWrite = L && L.role !== 'viewer', when = t => t ? new Date(t).toLocaleString() : '';
+  box.innerHTML = `<h2>Cloud projects</h2><div class="row"><span>Signed in as ${esc(cloudUser.email || '')}</span><button class="btn" id="cloudOut">Sign out</button></div>
+    <h2>This model</h2>${L ? `<div style="font-size:13px">Linked to <b>${esc(L.name)}</b> <small style="color:var(--muted)">${esc(L.role)} · saved ${esc(when(L.updated_at))}</small></div>` : '<div style="font-size:13px;color:var(--muted)">Not saved to the cloud yet.</div>'}
+    ${cloudConflict ? `<div class="adv error">“${esc(L.name)}” was changed in the cloud since you opened or last saved it.<div style="display:flex;gap:6px;margin-top:6px"><button class="btn" id="cloudReload">Reload cloud version</button><button class="btn" id="cloudOverwrite">Overwrite with mine</button></div></div>` : ''}
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0">${L ? `<button class="btn" id="cloudSave" ${canWrite ? '' : 'disabled title="view-only: use Save as new"'}>Save</button>` : ''}<button class="btn" id="cloudSaveAs">Save as new…</button>${L ? '<button class="btn" id="cloudUnlink">Unlink</button>' : ''}</div>
+    ${L && L.role === 'owner' ? `<h2>Share</h2><form class="add" id="cloudShare"><label>Email<input name="email" type="email" required></label><label>Role<select name="role"><option value="editor">editor</option><option value="viewer">viewer</option></select></label><button class="btn full" type="submit">Share</button></form>
+      ${(cloudShares || []).map(s => `<div class="el"><span>${esc(s.email)} <small style="color:var(--muted)">${esc(s.role)}</small></span><button data-unshare="${esc(s.email)}" title="Remove access">✕</button></div>`).join('')}` : ''}
+    <h2>Your projects <button class="btn" id="cloudRefresh" style="padding:0 6px">↻</button></h2>
+    ${(cloudList || []).map(p => `<div class="el"><span>${esc(p.name)} <small style="color:var(--muted)">${esc(p.role)} · ${esc(when(p.updated_at))}</small></span><span><button class="btn" data-open="${esc(p.id)}" style="color:var(--ink)">Open</button>${p.role === 'owner' ? ` <button data-del="${esc(p.id)}" title="Delete from the cloud">✕</button>` : ''}</span></div>`).join('') || '<small style="color:var(--muted)">No cloud projects yet.</small>'}${msg}`;
+  $('cloudOut').onclick = () => cloudDo(async () => { await cloud.logout(); cloudUser = null; cloudList = null; });
+  if ($('cloudSave')) $('cloudSave').onclick = () => cloudDo(() => cloudSave(false), 'saved');
+  if ($('cloudOverwrite')) $('cloudOverwrite').onclick = () => cloudDo(() => cloudSave(true), 'saved (overwrote the cloud version)');
+  if ($('cloudReload')) $('cloudReload').onclick = () => cloudDo(async () => openCloudData(await cloud.get(L.id)), 'reloaded the cloud version');
+  if ($('cloudUnlink')) $('cloudUnlink').onclick = () => { setCloudLink(null); renderCloud(); };
+  $('cloudSaveAs').onclick = () => { const name = prompt('Cloud project name', project.name); if (!name) return;
+    cloudDo(async () => { const r = await cloud.create(name, project); setCloudLink(r); await refreshCloud(); }, 'saved'); };
+  $('cloudRefresh').onclick = () => cloudDo(refreshCloud);
+  box.querySelectorAll('[data-open]').forEach(b => b.onclick = () => cloudDo(async () => openCloudData(await cloud.get(b.dataset.open))));
+  box.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { const p = cloudList.find(x => x.id === b.dataset.del);
+    if (!confirm(`Delete “${p.name}” from the cloud for everyone it is shared with?`)) return;
+    cloudDo(async () => { await cloud.remove(p.id); if (cloudLink && cloudLink.id === p.id) setCloudLink(null); await refreshCloud(); }); });
+  if ($('cloudShare')) $('cloudShare').onsubmit = ev => { ev.preventDefault(); const f = new FormData(ev.target);
+    cloudDo(async () => { await cloud.share(L.id, f.get('email'), f.get('role')); await refreshCloud(); }, `shared with ${f.get('email')}`); };
+  box.querySelectorAll('[data-unshare]').forEach(b => b.onclick = () => cloudDo(async () => { await cloud.unshare(L.id, b.dataset.unshare); await refreshCloud(); }));
+}
 
 
 (async () => {
@@ -460,6 +667,9 @@ document.querySelectorAll('.tabs .btn').forEach(b => b.onclick = () => selectTab
     if (saved) notice = ` · restored autosave from ${new Date(saved.saved_at).toLocaleString()}`;
     $('units').value = units;
     $('units').onchange = () => { units = $('units').value; store.set('buildsim.units', units); rerun(); };
+    // engine exports added in newer builds: show their buttons only when this wasm has them
+    $('exportXlsx').hidden = typeof bim.takeoff_xlsx !== 'function';
     rerun(false);
+    loadRuleIndex(); initCloud();
   } catch (e) { $('runErr').textContent = 'Failed to start: ' + e + '\n(Build the wasm first — see web/README.md.)'; }
 })();
