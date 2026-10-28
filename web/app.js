@@ -3,6 +3,7 @@ import init, * as bim from './pkg/bim_wasm.js';
 import { printHtml } from './print.js';
 import { setLevelElevation } from './levels.js';
 import { buildBcf } from './bcf.js';
+import { comparePanel, changedIds } from './compare.js';
 import { costRows, perLabel, rateOut, rateIn, parseDollars, ratesToCsv, parseRatesCsv } from './costs.js';
 import { snapStep, lenToInput, parseLen, fmtLen, fmtArea, areaToInput, parseArea, qtyOut, convertMessage } from './units.js';
 import { kindOf, clickSelect, deleteElements, moveElements, copyElements, pasteElements, rectBounds, commonValue, dependsCycle } from './clipboard.js';
@@ -20,6 +21,9 @@ const store = { get(k) { try { return localStorage.getItem(k); } catch (_) { ret
 let units = store.get('buildsim.units') || (navigator.language === 'en-US' ? 'imperial' : 'metric');
 const AUTOSAVE_KEY = 'buildsim.autosave.v1';
 let notice = '';
+// version comparison: an earlier version of the project to diff against ({ label, json })
+const BASELINE_KEY = 'buildsim.baseline.v1';
+let baseline = null;
 // synchronous on every change: a debounce loses the last edit when the tab closes or reloads
 function autosave() {
   if (!store.set(AUTOSAVE_KEY, JSON.stringify({ saved_at: new Date().toISOString(), project }))) status($('status').textContent + ' · autosave unavailable');
@@ -86,14 +90,23 @@ function rerun(keepDay = true) {
   $('runErr').textContent = '';
   try {
     const t0 = performance.now();
-    const report = JSON.parse(bim.run(JSON.stringify(project), rules));
+    let report;
+    try { report = JSON.parse(bim.run(JSON.stringify(project), rules, baseline ? baseline.json : undefined)); }
+    catch (e) {
+      // a baseline that no longer runs (e.g. saved by an older version) must not block the model
+      if (!baseline || !String(e).startsWith('baseline:')) throw e;
+      setBaseline(null); notice += ` · comparison stopped (${e})`;
+      report = JSON.parse(bim.run(JSON.stringify(project), rules));
+    }
     for (const a of report.advisories) a.message = convertMessage(a.message, units);
+    if (report.comparison) { report.comparison.label = baseline.label; for (const f of report.comparison.findings) f.finding.message = convertMessage(f.finding.message, units); }
     lastReport = report;
     $('spaceList').innerHTML = report.spaces.length
       ? report.spaces.map(s => `<div class="row"><span>${esc(s.name)} <small style="color:var(--muted)">${s.occupancy}</small></span><span>${fmtArea(s.area_m2, units)} · ${s.exits} exit${s.exits===1?'':'s'}</span></div>`).join('')
       : '<div class="row"><span>No spaces defined</span></div>';
     renderCodeSummary(report.code_summary);
     renderReadiness(report.readiness || []);
+    renderCompare(report.comparison);
     renderReport(report, { day: keepDay ? Math.min(lastDay, report.total_days) : 0, selected: sel, onClick: onViewClick, onMove: onViewMove, onHandle: onViewHandle, handlesFor, onDay: d => lastDay = d, level: lastLevel, onLevel: l => lastLevel = l, groundY: lvlY(),
       rectMode: () => placing === 'space', onRect: onViewRect, snapRect: v => Math.round(v / 0.5) * 0.5 });
     status(`ran in ${(performance.now()-t0).toFixed(1)} ms · schema v${bim.schema_version()}${rules ? '' : ` · no rule file for '${project.rule_set}', advisories skipped`}${notice}`);
@@ -405,6 +418,38 @@ function onViewClick({ id, point, ground, toggle }) {
 }
 
 
+// ---- version comparison: changes since a baseline (an earlier file, or this model as it was) ----
+function setBaseline(b) {
+  baseline = b;
+  if (!store.set(BASELINE_KEY, b ? JSON.stringify(b) : '') && b) notice += ' · baseline not kept after reload (browser storage full)';
+}
+function renderCompare(c) {
+  const box = $('compare');
+  if (!c) {
+    box.innerHTML = `<div class="row"><span><button class="btn" id="cmpFile" title="An earlier version: project .json or .ifc">Compare with file…</button> <button class="btn" id="cmpSet" title="Keep this model as it is now, to see what later edits change">Set current as baseline</button></span></div>` +
+      `<div class="row"><small style="color:var(--muted)">See what changed since an issued set: elements, findings new and resolved, clashes, cost, schedule.</small></div>`;
+    $('cmpFile').onclick = () => $('baselineFile').click();
+    $('cmpSet').onclick = () => { setBaseline({ label: `this model, ${new Date().toLocaleString()}`, json: JSON.stringify(project) }); rerun(); };
+    return;
+  }
+  const present = id => project.elements.some(e => e.id === id);
+  box.innerHTML = comparePanel(c, { units, present });
+  $('cmpClear').onclick = () => { setBaseline(null); rerun(); };
+  $('cmpHighlight').onclick = () => { const ids = changedIds(c, present); select(ids); status(`selected ${ids.length} changed element${ids.length === 1 ? '' : 's'}`); };
+  box.querySelectorAll('.pick').forEach(r => r.onclick = () => select(r.dataset.ids.split(' ')));
+}
+$('baselineFile').onchange = async ev => {
+  const f = ev.target.files[0]; ev.target.value = ''; if (!f) return;
+  try {
+    const text = await f.text();
+    const p = /\.ifc$/i.test(f.name) || text.trimStart().startsWith('ISO-10303-21')
+      ? JSON.parse(bim.import_ifc(text, f.name.replace(/\.[^.]+$/, ''))).project : JSON.parse(text);
+    const v = JSON.parse(bim.validate(JSON.stringify(p)));
+    if (v.length) throw new Error(`${f.name} is not a valid project:\n${v.join('\n')}`);
+    setBaseline({ label: f.name, json: JSON.stringify(p) }); rerun();
+  } catch (e) { $('runErr').textContent = String(e); }
+};
+
 // ---- model readiness: what the checks need but the model lacks ----
 function renderReadiness(items) {
   const warn = items.filter(i => i.severity === 'warning').length;
@@ -697,6 +742,7 @@ function renderCloud() {
     const saved = restoreAutosave();
     project = saved ? saved.project : JSON.parse(bim.sample_project());
     if (saved) notice = ` · restored autosave from ${new Date(saved.saved_at).toLocaleString()}`;
+    try { const b = JSON.parse(store.get(BASELINE_KEY)); if (b && b.json) baseline = b; } catch (_) { /* none kept */ }
     $('units').value = units;
     $('units').onchange = () => { units = $('units').value; store.set('buildsim.units', units); rerun(); };
     // engine exports added in newer builds: show their buttons only when this wasm has them

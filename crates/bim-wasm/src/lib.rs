@@ -8,9 +8,51 @@
 use wasm_bindgen::prelude::*;
 
 /// Full pipeline: validate → schedule → rules → clashes → takeoff → meshes. Returns report JSON.
+/// With `baseline_json` (an earlier version of the project), the report also carries
+/// `comparison`: what changed since then. The baseline's own report is cached between calls,
+/// so comparing costs one extra build per baseline, not per edit.
 #[wasm_bindgen]
-pub fn run(project_json: &str, rules_json: Option<String>) -> Result<String, String> {
-    bim_report::build_json(project_json, rules_json.as_deref()).map_err(|e| e.to_string())
+pub fn run(
+    project_json: &str,
+    rules_json: Option<String>,
+    baseline_json: Option<String>,
+) -> Result<String, String> {
+    let Some(base) = baseline_json else {
+        return bim_report::build_json(project_json, rules_json.as_deref())
+            .map_err(|e| e.to_string());
+    };
+    let err = |e: &dyn std::fmt::Display| e.to_string();
+    let project = bim_core::Project::from_json(project_json).map_err(|e| err(&e))?;
+    let rules = rules_json
+        .as_deref()
+        .map(bim_rules::RuleSet::from_json)
+        .transpose()
+        .map_err(|e| err(&e))?;
+    let mut report = bim_report::build(&project, rules.as_ref()).map_err(|e| err(&e))?;
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (&base, &rules_json).hash(&mut h);
+        h.finish()
+    };
+    BASELINE.with(|cell| -> Result<(), String> {
+        let mut cached = cell.borrow_mut();
+        if cached.as_ref().map(|c| c.0) != Some(key) {
+            let old = bim_core::Project::from_json(&base).map_err(|e| format!("baseline: {e}"))?;
+            let old_r =
+                bim_report::build(&old, rules.as_ref()).map_err(|e| format!("baseline: {e}"))?;
+            *cached = Some((key, old, old_r));
+        }
+        let (_, old, old_r) = cached.as_ref().expect("filled above");
+        report.comparison = Some(bim_report::compare::diff(old, old_r, &project, &report));
+        Ok(())
+    })?;
+    serde_json::to_string(&report).map_err(|e| err(&e))
+}
+
+type Baseline = (u64, bim_core::Project, bim_report::Report);
+thread_local! {
+    static BASELINE: std::cell::RefCell<Option<Baseline>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Validation only (cheap; call on every keystroke). Returns a JSON array of messages.
@@ -88,8 +130,34 @@ mod tests {
     const RS: &str = include_str!("../../../rules/IN-2026.json");
     #[test]
     fn run_sample_natively() {
-        let j = run(&sample_project().unwrap(), Some(RS.to_string())).unwrap();
+        let j = run(&sample_project().unwrap(), Some(RS.to_string()), None).unwrap();
         assert!(j.contains("\"total_days\":57"));
+    }
+    #[test]
+    fn run_with_baseline_reports_changes() {
+        let base = sample_project().unwrap();
+        let plain: serde_json::Value =
+            serde_json::from_str(&run(&base, Some(RS.into()), None).unwrap()).unwrap();
+        assert!(plain.get("comparison").is_none());
+        let mut p: serde_json::Value = serde_json::from_str(&base).unwrap();
+        p["name"] = "Sample office rev B".into();
+        let els = p["elements"].as_array_mut().unwrap();
+        let removed = els.pop().unwrap();
+        let cur = p.to_string();
+        // second call reuses the cached baseline report; same answer
+        for _ in 0..2 {
+            let r: serde_json::Value =
+                serde_json::from_str(&run(&cur, Some(RS.into()), Some(base.clone())).unwrap())
+                    .unwrap();
+            let c = &r["comparison"];
+            assert_eq!(c["elements"].as_array().unwrap().len(), 1);
+            assert_eq!(c["elements"][0]["status"], "removed");
+            assert_eq!(c["elements"][0]["id"], removed["id"]);
+        }
+        // a different baseline replaces the cache
+        let r: serde_json::Value =
+            serde_json::from_str(&run(&cur, Some(RS.into()), Some(cur.clone())).unwrap()).unwrap();
+        assert!(r["comparison"]["elements"].as_array().unwrap().is_empty());
     }
     #[test]
     fn validate_reports_problems() {
@@ -99,7 +167,11 @@ mod tests {
     }
     #[test]
     fn bad_json_is_err() {
-        assert!(run("{", None).is_err());
+        assert!(run("{", None, None).is_err());
+        let ok = sample_project().unwrap();
+        assert!(run(&ok, None, Some("{".into()))
+            .unwrap_err()
+            .starts_with("baseline:"));
     }
     #[test]
     fn imports_ifc_to_a_runnable_project() {
@@ -107,7 +179,7 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
         assert!(v["notes"][0].as_str().unwrap().starts_with("Imported"));
         let p = serde_json::to_string(&v["project"]).unwrap();
-        assert!(run(&p, Some(RS.to_string())).is_ok());
+        assert!(run(&p, Some(RS.to_string()), None).is_ok());
         assert!(import_ifc("not ifc", "f").is_err());
     }
     #[test]

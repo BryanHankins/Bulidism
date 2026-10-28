@@ -304,6 +304,7 @@ dependencies = [
  "bim-geom",
  "bim-ifc",
  "bim-report",
+ "bim-rules",
  "serde_json",
  "wasm-bindgen",
 ]

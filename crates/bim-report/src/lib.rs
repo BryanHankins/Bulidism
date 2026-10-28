@@ -5,6 +5,7 @@ use bim_core::*;
 use serde::Serialize;
 
 pub mod code;
+pub mod compare;
 pub mod readiness;
 
 #[derive(Debug, thiserror::Error)]
@@ -120,6 +121,9 @@ pub struct Report {
     pub spaces: Vec<SpaceOut>,
     /// Storeys, lowest first.
     pub levels: Vec<LevelOut>,
+    /// Changes since a baseline version, when one was given (see `compare`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparison: Option<compare::Comparison>,
 }
 
 pub const CLASH_TOLERANCE_M3: f32 = 0.001;
@@ -332,6 +336,7 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
         })
         .collect();
     Ok(Report {
+        comparison: None,
         spaces,
         levels,
         rules_checked,

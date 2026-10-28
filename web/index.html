@@ -18,6 +18,10 @@ form.add .full{grid-column:1/3}
 textarea{width:100%;height:220px;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);padding:6px}
 .err{color:var(--err);font-size:12px;white-space:pre-wrap}
 #status{font-size:12px;color:var(--muted)}
+#compare h3{font-size:13px;margin:8px 0 2px}#compare h3 small,#compare summary small{font-weight:400;color:var(--muted)}
+#compare .pick{cursor:pointer}#compare .pick:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}
+#compare summary{cursor:pointer;margin-top:6px;font-size:13px}
+.cmp-added{color:var(--err)}.cmp-removed{color:var(--ok)}.cmp-changed{color:var(--warn)}
 .costs{width:100%;font-size:12px;border-collapse:collapse}.costs th,.costs td{padding:2px 4px;text-align:left;border-bottom:1px dashed var(--line)}
 .costs input{width:72px;font:inherit}.costs tr.missing td{color:var(--err)}.costs .btn{padding:0 6px}
 </style>
@@ -26,7 +30,7 @@ textarea{width:100%;height:220px;font:12px/1.4 ui-monospace,Menlo,Consolas,monos
 <div id="app">
 <header><h1 id="title">buildsim</h1><span class="sub" id="subtitle"></span><span id="status"></span><span style="flex:1"></span>
  <select class="btn" id="units" title="Display units (the model is stored in metres)"><option value="imperial">ft-in</option><option value="metric">m</option></select> <button class="btn" id="undo" disabled title="Ctrl+Z">↶</button><button class="btn" id="redo" disabled title="Ctrl+Y">↷</button><button class="btn" id="new">New</button><button class="btn" id="open" title="Open a project (.json) or import an IFC model (.ifc)">Open / IFC</button><button class="btn" id="save">Save</button><button class="btn" id="exportCsv">CSV</button><button class="btn" id="exportXlsx" hidden title="Quantity takeoff as an Excel workbook">XLSX</button><button class="btn" id="exportBcf" title="Findings and clashes as BCF 2.1 issues (Revit, Solibri, BIMcollab)">BCF</button><button class="btn" id="exportHtml">Report</button><button class="btn" id="printReport" title="Printable code-check report (save as PDF from the print dialog)">Print</button><button class="btn" id="play">Play</button>
- <input type="file" id="file" accept=".json,.ifc,application/json" hidden></header>
+ <input type="file" id="file" accept=".json,.ifc,application/json" hidden><input type="file" id="baselineFile" accept=".json,.ifc,application/json" hidden></header>
 <div id="view"><canvas id="c"></canvas>
  <div id="hud"><div class="day">Day <span id="day">0</span> / <span id="total">0</span></div><div class="cost">Cumulative cost $<span id="cost">0</span></div><input id="slider" type="range" min="0" max="0" value="0" step="1"></div>
 </div>
@@ -35,6 +39,7 @@ textarea{width:100%;height:220px;font:12px/1.4 ui-monospace,Menlo,Consolas,monos
  <div class="tabs"><button class="btn" data-tab="report" aria-selected="true">Report</button><button class="btn" data-tab="edit">Edit</button><button class="btn" data-tab="json">JSON</button><button class="btn" data-tab="cloud" hidden>Cloud</button></div>
  <div class="pane" id="pane-report">
   <div id="readiness"></div>
+  <h2>Compare versions</h2><div id="compare"></div>
   <h2>Legend</h2><div class="legend" id="legend"></div>
   <label class="chk"><input type="checkbox" id="showClash"> Show clashes (<span id="nclash">0</span>)</label>
   <label class="chk"><input type="checkbox" id="showSpaces" checked> Show space outlines</label>

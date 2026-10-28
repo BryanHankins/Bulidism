@@ -2,6 +2,7 @@
 // Pure function of the engine report, so it can be tested without a browser.
 import { fmtArea, fmtVol, fmtMeasure, fmtLen } from './units.js';
 import './cites.js';
+import { totalText, measuredChange, FINDING_STATUS, MARK } from './compare.js';
 
 const { citeHtml } = globalThis.BuildsimCites;
 
@@ -17,6 +18,21 @@ function readinessBlock(items) {
   if (!items || !items.length) return '';
   return `<h2>Model readiness</h2><ul style="margin:4px 0 0;padding-left:18px">${items.map(i =>
     `<li${i.severity === 'warning' ? ' class="sev warning" style="font-weight:400"' : ''}>${i.count ? i.count + ' ' : ''}${esc(i.message)}${i.examples.length ? ` (${i.examples.map(esc).join(', ')}${i.count > i.examples.length ? ', …' : ''})` : ''}</li>`).join('')}</ul>`;
+}
+
+/** Changes since the baseline version (revision narrative for a reissue); empty without one. */
+function changesBlock(c, units, table) {
+  if (!c) return '';
+  const totals = c.totals.filter(t => t.before !== t.after);
+  const rows = [];
+  for (const f of c.findings) rows.push(`<tr><td>Finding</td><td class="sev ${esc(f.finding.severity)}">${FINDING_STATUS[f.status]}</td><td>${esc(f.finding.subject)}</td><td>${esc(f.finding.check || f.finding.message)}${measuredChange(f, units) ? ` (${esc(measuredChange(f, units))})` : ''}</td></tr>`);
+  for (const k of c.clashes) rows.push(`<tr><td>Clash</td><td>${k.status === 'added' ? 'New' : 'Resolved'}</td><td>${esc(k.a_name)}</td><td>with ${esc(k.b_name)}</td></tr>`);
+  for (const e of c.elements) rows.push(`<tr><td>Element</td><td>${MARK[e.status]} ${e.status}</td><td>${esc(e.name)}</td><td>${esc(e.aspects.join(', '))}</td></tr>`);
+  for (const sp of c.spaces) rows.push(`<tr><td>Space</td><td>${MARK[sp.status]} ${sp.status}</td><td>${esc(sp.name)}</td><td>${esc(sp.aspects.join(', '))}</td></tr>`);
+  return `<h2>Changes since ${esc(c.label || c.baseline)}</h2>` +
+    (totals.length ? `<p class="meta">${totals.map(t => { const x = totalText(t); return `${esc(t.label)} ${x.before} → <b>${x.after}</b> (${x.delta})`; }).join(' · ')}</p>` : '') +
+    table(['Item', 'Change', 'Element / space', 'Detail'], rows, 'No changes.') +
+    (c.unchanged_findings ? `<p class="none">${c.unchanged_findings} finding${c.unchanged_findings === 1 ? '' : 's'} unchanged.</p>` : '');
 }
 
 /** The code analysis sheet ("code data block"); empty when the rule set has no parameters. */
@@ -104,6 +120,7 @@ tr { break-inside: avoid; } td.num, th.num { text-align: right; white-space: now
  <div><b>${(r.rules_checked || []).length}</b>Rules checked</div><div><b>${r.clashes.length}</b>Clashes</div>
 </div>
 
+${changesBlock(r.comparison, units, table)}
 ${readinessBlock(r.readiness)}
 ${codeSheet(r.code_summary, units, table)}
 <h2>Findings</h2>
