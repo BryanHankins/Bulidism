@@ -206,8 +206,11 @@ fn fixture_imports_every_supported_kind() {
     let sp = &p.spaces[0];
     assert_eq!(sp.name, "Waiting Room");
     assert_eq!(sp.occupancy, Occupancy::Assembly);
-    assert!(near(sp.floor_area_m2, 23.5));
-    assert_eq!(sp.bounds, Some([0.0, 0.0, 6.0, 4.0])); // measured area within 10% of the box: outline kept
+    // the extruded 6 x 4 m profile is the outline; the file's NetFloorArea (23.5) agrees within 15%
+    assert!(near(sp.floor_area_m2, 24.0));
+    assert_eq!(sp.outline.as_ref().map(Vec::len), Some(4));
+    assert!(near(sp.area_m2(), 24.0));
+    assert_eq!(sp.bounds, Some([0.0, 0.0, 6.0, 4.0]));
     assert_eq!(sp.egress_doors, vec![by_name(p, "Front door").id]);
 
     assert_eq!(

@@ -69,9 +69,18 @@ const grid=new THREE.GridHelper(40,40,dark?0x4a463f:0xbbb5aa,dark?0x2e2b27:0xdcd
 const clashGroup=new THREE.Group(); clashGroup.visible=false; S.add(clashGroup);
 const spaceGroup=new THREE.Group(); S.add(spaceGroup);
 const levels=D.levels||[], elevOf=id=>{const l=levels.find(l=>l.id===id);return l?l.elevation_m:0;};
-for(const sp of (D.spaces||[])){ if(!sp.bounds) continue; const [x,z,sx,sz]=sp.bounds, y=elevOf(sp.level)+0.02;
-  const g=new THREE.BufferGeometry().setFromPoints([[x,y,z],[x+sx,y,z],[x+sx,y,z+sz],[x,y,z+sz],[x,y,z]].map(p=>new THREE.Vector3(...p)));
+// room shapes: the outline (e.g. from IFC), else the plan rectangle
+for(const sp of (D.spaces||[])){ const y=elevOf(sp.level)+0.02;
+  const o=sp.outline||(sp.bounds&&(([x,z,sx,sz])=>[[x,z],[x+sx,z],[x+sx,z+sz],[x,z+sz]])(sp.bounds)); if(!o) continue;
+  const g=new THREE.BufferGeometry().setFromPoints([...o,o[0]].map(([x,z])=>new THREE.Vector3(x,y,z)));
   const ln=new THREE.Line(g,new THREE.LineBasicMaterial({color:0x3f7a3a})); ln.userData.level=sp.level; spaceGroup.add(ln);}
+// the longest walk out of each room (most remote point -> nearest exit), with a dot at its start
+const pathGroup=new THREE.Group(); pathGroup.visible=!!($('showPaths')&&$('showPaths').checked); S.add(pathGroup);
+for(const ep of (D.egress_paths||[])){
+  const ln=new THREE.Line(new THREE.BufferGeometry().setFromPoints(ep.points.map(p=>new THREE.Vector3(...p))),new THREE.LineBasicMaterial({color:0xb5331c}));
+  ln.userData.level=ep.level; pathGroup.add(ln);
+  const dot=new THREE.Mesh(new THREE.SphereGeometry(0.12,10,10),new THREE.MeshBasicMaterial({color:0xb5331c})); dot.position.set(...ep.points[0]); dot.userData.level=ep.level; pathGroup.add(dot);}
+if($('showPaths'))$('showPaths').onchange=e=>pathGroup.visible=e.target.checked;
 // level filter: isolate one storey (elements with no level are site work, shown under "All")
 let levelSel=opts.level??'all';
 const levelRow=$('levelRow'), levelFilter=$('levelFilter');
@@ -181,6 +190,7 @@ let day=0, playing=false, last=0;
 function setDay(d){day=Math.max(0,Math.min(D.total_days,d));$('slider').value=day;$('day').textContent=day;
   if(MERGE)updateGroups(); else for(const m of meshes)m.visible=day>=m.userData.start_day&&onLevel(m.userData.level);
   for(const l of spaceGroup.children)l.visible=onLevel(l.userData.level);
+  for(const l of pathGroup.children)l.visible=onLevel(l.userData.level);
   let cost=0; for(const e of D.elements)if(day>=e.start_day)cost+=e.cost_usd;
   $('cost').textContent=cost.toLocaleString(undefined,{minimumFractionDigits:2});
   const n=$('ganttNow'); if(n)n.style.left=pct(day)+'%';

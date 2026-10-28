@@ -27,7 +27,11 @@ fn item(id: &str, severity: &str, message: String, names: Vec<String>) -> Option
     })
 }
 
-pub fn check(p: &Project, rules: Option<&RuleSet>) -> Vec<ReadinessItem> {
+pub fn check(
+    p: &Project,
+    rules: Option<&RuleSet>,
+    analysis: Option<&bim_egress::Analysis>,
+) -> Vec<ReadinessItem> {
     let mut out = Vec::new();
     let names = |it: &mut dyn Iterator<Item = &String>| it.cloned().collect::<Vec<_>>();
     if let Some(rs) = rules {
@@ -133,6 +137,37 @@ pub fn check(p: &Project, rules: Option<&RuleSet>) -> Vec<ReadinessItem> {
             ),
         ));
     }
+    if let (Some(rs), Some(eg)) = (rules, analysis) {
+        if rs.needs_egress() {
+            out.extend(item(
+                "space.no_shape",
+                "warning",
+                "spaces with no outline or plan rectangle: travel distance and common path are not checked (draw them, or import IFC spaces with geometry)".into(),
+                names(
+                    &mut p
+                        .spaces
+                        .iter()
+                        .zip(&eg.spaces)
+                        .filter(|(_, e)| !e.analyzed)
+                        .map(|(s, _)| &s.name),
+                ),
+            ));
+        }
+        if eg.spaces.iter().any(|e| e.analyzed) {
+            out.extend(item(
+                "door.no_room",
+                "info",
+                "doors with no room on either side: not on any egress route (is the room drawn as a space, on the door's level?)".into(),
+                names(
+                    &mut eg
+                        .doors
+                        .iter()
+                        .filter(|d| d.sides == [None, None])
+                        .map(|d| &d.name),
+                ),
+            ));
+        }
+    }
     out.extend(item(
         "element.no_cost_code",
         "info",
@@ -156,7 +191,7 @@ mod tests {
     #[test]
     fn sample_is_ready_except_construction_type() {
         let rs = RuleSet::from_json(RS).unwrap();
-        let ids: Vec<String> = check(&Project::sample(), Some(&rs))
+        let ids: Vec<String> = check(&Project::sample(), Some(&rs), None)
             .into_iter()
             .map(|i| i.id)
             .collect();
@@ -177,7 +212,7 @@ mod tests {
         }
         p.elements[0].cost_code.clear();
         p.elements[0].level = None; // the slab: structural, so worth a level
-        let r = check(&p, Some(&rs));
+        let r = check(&p, Some(&rs), None);
         let ids: Vec<(&str, usize)> = r.iter().map(|i| (i.id.as_str(), i.count)).collect();
         assert_eq!(
             ids,

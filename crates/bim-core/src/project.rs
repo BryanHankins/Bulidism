@@ -151,6 +151,14 @@ impl Project {
                 s.name, s.level
             )));
         }
+        for s in &self.spaces {
+            if let Some(why) = s.outline.as_deref().and_then(crate::plan::outline_problem) {
+                errs.push(ProjectError::Invalid(format!(
+                    "space '{}' outline {why}",
+                    s.name
+                )));
+            }
+        }
         let mut ids = std::collections::HashSet::new();
         for e in &self.elements {
             if !ids.insert(e.id) {
@@ -521,6 +529,7 @@ impl Project {
             egress_doors: vec![door_id, door2_id],
             bounds: Some([0.0, 0.0, 12.0, 8.0]),
             level: Some(LevelId(0)),
+            outline: None,
         });
         // one storey at the top of the ground slab; the entry ramp is site work
         p.levels = vec![Level {
@@ -685,6 +694,31 @@ mod tests {
         let errs = p.validate();
         assert_eq!(errs.len(), 3, "{errs:?}");
     }
+    #[test]
+    fn space_outline_drives_area_and_must_be_simple() {
+        let mut p = Project::sample();
+        p.spaces[0].outline = Some(vec![
+            [0.0, 0.0],
+            [12.0, 0.0],
+            [12.0, 4.0],
+            [6.0, 4.0],
+            [6.0, 8.0],
+            [0.0, 8.0],
+        ]);
+        assert!((p.spaces[0].area_m2() - 72.0).abs() < 1e-4);
+        assert_eq!(p.spaces[0].polygon().unwrap().len(), 6);
+        assert!(p.validate().is_empty());
+        p.spaces[0].outline = Some(vec![[0.0, 0.0], [2.0, 2.0], [2.0, 0.0], [0.0, 2.0]]);
+        let errs = p.validate();
+        assert!(
+            errs.iter().any(|e| e.to_string().contains("outline edges")),
+            "{errs:?}"
+        );
+        // round-trips, and older files without it still load
+        p.spaces[0].outline = None;
+        assert!(!p.to_json().unwrap().contains("outline"));
+    }
+
     #[test]
     fn space_area_follows_bounds() {
         let mut p = Project::sample();

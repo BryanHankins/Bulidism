@@ -9,6 +9,7 @@ bim-core.workspace = true
 bim-geom.workspace = true
 bim-schedule.workspace = true
 bim-rules.workspace = true
+bim-egress.workspace = true
 bim-takeoff.workspace = true
 serde.workspace = true
 serde_json.workspace = true

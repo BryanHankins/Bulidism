@@ -148,3 +148,25 @@ test('bad JSON never replaces the model', async () => {
   assert.deepEqual(errors, []);
   await ctx.close();
 });
+
+test('egress: walking distances per room, longest-walk overlay, travel and common-path findings', async () => {
+  const { page, ctx, errors } = await openApp();
+  assert.match(await text(page, '#spaceList'), /longest walk to an exit 31'-\d+ ?[\d/]*" · common path 0"/);
+  await page.check('#showPaths');
+  // stretch the office to 70 m with only the main entry as an exit
+  await applyJson(page, p => {
+    const north = p.elements.find(e => e.name === 'North wall');
+    north.kind.Wall.start[2] = 70; north.kind.Wall.end[2] = 70;
+    p.spaces[0].bounds = [0, 0, 12, 70];
+    for (const e of p.elements) if (e.kind.Door) e.kind.Door.is_egress = e.name === 'Main entry';
+  });
+  const advs = await text(page, '#advs');
+  assert.match(advs, /exit access travel distance 230'-\d/, advs);
+  assert.match(advs, /common path of egress travel 230'-\d.* > 75'-0"/);
+  const [w] = await Promise.all([page.waitForEvent('popup'), page.click('#printReport')]);
+  await w.waitForLoadState();
+  assert.match(await w.evaluate(() => document.body.innerText), /Travel to exit\s+Common path/);
+  await w.close();
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});

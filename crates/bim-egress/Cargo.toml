@@ -1,0 +1,11 @@
+[package]
+name = "bim-egress"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bim-core.workspace = true
+
+[dev-dependencies]
+glam.workspace = true

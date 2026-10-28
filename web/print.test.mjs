@@ -92,3 +92,17 @@ test('citations link to the code text in a new tab', () => {
   const r = printHtml(report({ advisories: [{ rule_id: 'x', cite: 'IBC 2024 §1010.1.1', severity: 'error', subject: 'D', message: 'm' }] }), 'metric');
   assert.ok(r.includes('<a href="https://codes.iccsafe.org/content/IBC2024P1/chapter-10-means-of-egress" target="_blank" rel="noopener noreferrer">IBC 2024 §1010.1.1</a>'));
 });
+
+test('walking distances per room when rooms have a plan shape', () => {
+  const r = report({ spaces: [
+    { name: 'Office', occupancy: 'Business', area_m2: 96, exits: 2, occupant_load: 7, outline: [[0, 0], [1, 0], [1, 1]], travel_m: 9.6, common_path_m: 0 },
+    { name: 'Store', occupancy: 'Storage', area_m2: 9, exits: 0, occupant_load: 1, outline: [[0, 0], [1, 0], [1, 1]], travel_m: null, common_path_m: null },
+    { name: 'Lobby', occupancy: 'Business', area_m2: 20, exits: 1, occupant_load: 2 },
+  ] });
+  const h = printHtml(r, 'imperial', new Date(2026, 9, 12));
+  assert.ok(h.includes('<th class="num">Travel to exit</th><th class="num">Common path</th>'));
+  assert.ok(h.includes(`<td class="num">31&#39;-6&#34;</td><td class="num">0&#34;</td>`), h.slice(h.indexOf('Spaces')));
+  assert.ok(h.includes('<span class="sev error">no route</span>'));
+  assert.ok(h.includes('<td class="num">not checked</td><td class="num">—</td>'));
+  assert.ok(!printHtml(report(), 'imperial').includes('Travel to exit'), 'no column without shapes');
+});

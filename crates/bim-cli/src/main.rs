@@ -140,6 +140,19 @@ fn main() -> ExitCode {
         }
     }
 
+    if report.spaces.iter().any(|s| s.outline.is_some()) {
+        println!("\nEgress (longest walk to the nearest exit / common path of travel)");
+        for s in &report.spaces {
+            let m = |v: Option<f32>| v.map_or("—".to_string(), |v| format!("{v:.1} m"));
+            let travel = match (&s.outline, s.travel_m) {
+                (None, _) => "no plan shape: not checked".to_string(),
+                (Some(_), None) => "NO ROUTE TO AN EXIT".to_string(),
+                (Some(_), t) => format!("travel {} · common path {}", m(t), m(s.common_path_m)),
+            };
+            println!("  {:<20} {travel}", s.name);
+        }
+    }
+
     println!(
         "\nClashes ({}) — cross-discipline overlap > {} m3",
         report.clashes.len(),

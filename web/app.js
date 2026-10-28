@@ -102,7 +102,8 @@ function rerun(keepDay = true) {
     if (report.comparison) { report.comparison.label = baseline.label; for (const f of report.comparison.findings) f.finding.message = convertMessage(f.finding.message, units); }
     lastReport = report;
     $('spaceList').innerHTML = report.spaces.length
-      ? report.spaces.map(s => `<div class="row"><span>${esc(s.name)} <small style="color:var(--muted)">${s.occupancy}</small></span><span>${fmtArea(s.area_m2, units)} · ${s.exits} exit${s.exits===1?'':'s'}</span></div>`).join('')
+      ? report.spaces.map(s => `<div class="row"><span>${esc(s.name)} <small style="color:var(--muted)">${s.occupancy}</small></span><span>${fmtArea(s.area_m2, units)} · ${s.exits} exit${s.exits===1?'':'s'}</span></div>` +
+          (s.outline ? `<div class="row sub"><span>longest walk to an exit</span><span>${s.travel_m == null ? '<b style="color:var(--err)">no route</b>' : `${fmtLen(s.travel_m, units)} · common path ${fmtLen(s.common_path_m, units)}`}</span></div>` : '')).join('')
       : '<div class="row"><span>No spaces defined</span></div>';
     renderCodeSummary(report.code_summary);
     renderReadiness(report.readiness || []);
@@ -246,6 +247,7 @@ function renderSpaces() {
       <div style="display:flex;gap:6px"><input data-sp="${i}" data-f="name" value="${esc(s.name)}" style="flex:1"><button data-del="${i}" class="btn">✕</button></div>
       <label class="chk">Occupancy<select data-sp="${i}" data-f="occupancy">${opts}</select></label>
       <label class="chk">Level<select data-sp="${i}" data-f="level">${levelOptions(s.level)}</select></label>
+      ${s.outline ? `<div style="font-size:12px;color:var(--muted)">Room outline: ${s.outline.length} corners, ${fmtArea(Math.abs(s.outline.reduce((a, p, k, o) => a + p[0] * o[(k + 1) % o.length][1] - o[(k + 1) % o.length][0] * p[1], 0)) / 2, units)} (editing the rectangle below replaces it)</div>` : ''}
       <label class="chk" style="font-size:12px"><input type="checkbox" data-sp="${i}" data-f="useBounds" ${b ? 'checked' : ''}> area from plan rectangle</label>
       ${b ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">${['x','z','size x','size z'].map((l, j) => `<label style="font-size:11px;color:var(--muted)">${l}${lenInput(`data-sp="${i}" data-b="${j}" style="width:100%"`, b[j])}</label>`).join('')}</div>`
           : `<label class="chk" style="font-size:12px">Area ${units === 'imperial' ? 'sf' : 'm²'}<input type="number" step="1" data-sp="${i}" data-f="floor_area_m2" value="${areaToInput(s.floor_area_m2, units)}" style="width:80px"></label>`}
@@ -255,6 +257,8 @@ function renderSpaces() {
     const v = inp.dataset.b !== undefined ? parseLen(inp.value, units) : inp.dataset.f === 'floor_area_m2' ? parseArea(inp.value, units) : 0;
     if (Number.isNaN(v)) { badLen(inp.value); renderSpaces(); return; }
     snapshot(); const sp = project.spaces[+inp.dataset.sp];
+    // editing the rectangle replaces an imported room outline with it
+    if (inp.dataset.b !== undefined || inp.dataset.f === 'useBounds') delete sp.outline;
     if (inp.dataset.b !== undefined) { sp.bounds[+inp.dataset.b] = v; sp.floor_area_m2 = sp.bounds[2] * sp.bounds[3]; }
     else if (inp.dataset.f === 'useBounds') { sp.bounds = inp.checked ? [0, 0, Math.sqrt(sp.floor_area_m2) || 4, Math.sqrt(sp.floor_area_m2) || 4] : null; if (sp.bounds) sp.floor_area_m2 = sp.bounds[2] * sp.bounds[3]; }
     else if (inp.dataset.f === 'floor_area_m2') sp.floor_area_m2 = v;

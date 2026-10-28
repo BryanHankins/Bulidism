@@ -72,6 +72,8 @@ ${table(['Occupancy', 'Fixture', 'Occupant load#', 'Required#', 'Parameter verif
  */
 export function printHtml(r, units, now = new Date()) {
   const name = id => (r.elements.find(e => e.id === id) || {}).name || '?';
+  // walking distances shown when any room has a plan shape
+  const walks = (r.spaces || []).some(s => s.outline);
   const levels = r.levels || [], levelName = id => (levels.find(l => l.id === id) || {}).name || '—';
   const findings = [...r.advisories].sort((a, b) => RANK[a.severity] - RANK[b.severity]);
   const count = s => r.advisories.filter(a => a.severity === s).length;
@@ -134,9 +136,10 @@ ${table(['Rule', 'Citation', 'Result', 'Parameter verification'],
   'No rule file was loaded, so no code checks ran.')}
 
 <h2>Spaces</h2>
-${table(['Space', ...(levels.length ? ['Level'] : []), 'Occupancy', 'Area#', 'Occupant load#', 'Exits#'],
-  r.spaces.map(s => `<tr><td>${esc(s.name)}</td>${levels.length ? `<td>${esc(levelName(s.level))}</td>` : ''}<td>${esc(s.occupancy)}</td><td class="num">${esc(fmtArea(s.area_m2, units))}</td><td class="num">${s.occupant_load ?? '—'}</td><td class="num">${s.exits}</td></tr>`),
+${table(['Space', ...(levels.length ? ['Level'] : []), 'Occupancy', 'Area#', 'Occupant load#', 'Exits#', ...(walks ? ['Travel to exit#', 'Common path#'] : [])],
+  r.spaces.map(s => `<tr><td>${esc(s.name)}</td>${levels.length ? `<td>${esc(levelName(s.level))}</td>` : ''}<td>${esc(s.occupancy)}</td><td class="num">${esc(fmtArea(s.area_m2, units))}</td><td class="num">${s.occupant_load ?? '—'}</td><td class="num">${s.exits}</td>${walks ? `<td class="num">${!s.outline ? 'not checked' : s.travel_m == null ? '<span class="sev error">no route</span>' : esc(fmtLen(s.travel_m, units))}</td><td class="num">${s.outline && s.common_path_m != null ? esc(fmtLen(s.common_path_m, units)) : '—'}</td>` : ''}</tr>`),
   'No spaces defined.')}
+${walks ? '<p class="none">Travel to exit: the longest walk from any point in the room to the nearest exit (egress door to outside, or exit stair), around walls and through doors; furniture is not modelled. Common path: walked before two routes that share no room lead to distinct exits. Rooms with no plan shape are not checked.</p>' : ''}
 
 <h2>Clashes</h2>
 ${table(['Element', 'Clashes with', 'Overlap#'],
