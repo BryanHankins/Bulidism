@@ -1,0 +1,30 @@
+name: uptime
+# Hourly check of the live app's health endpoint (which also checks the database).
+# Set the repository variable HEALTH_URL (Settings > Secrets and variables > Actions > Variables),
+# e.g. https://buildsim.onrender.com/api/health. Unset = skipped.
+# A failed run is the alert: GitHub emails the person who last changed this schedule. For checks
+# every few minutes with SMS/app alerts, point a free external monitor (UptimeRobot, Better Stack)
+# at the same URL instead; it also costs no Actions minutes.
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+permissions: {}
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check /api/health
+        env:
+          HEALTH_URL: ${{ vars.HEALTH_URL }}
+        run: |
+          if [ -z "$HEALTH_URL" ]; then echo "::notice::HEALTH_URL is not set; skipping"; exit 0; fi
+          # a free Render service sleeps when idle, so allow for a cold start
+          for i in 1 2 3; do
+            if body=$(curl -sS --max-time 120 "$HEALTH_URL") && echo "$body" | grep -q '"ok":true'; then
+              echo "healthy: $body"; exit 0
+            fi
+            echo "attempt $i failed: ${body:-no response}"; sleep 30
+          done
+          echo "::error::$HEALTH_URL is unhealthy"; exit 1

@@ -1,0 +1,51 @@
+name: db-backup
+# Daily encrypted pg_dump of the production database, kept as a workflow artifact for 30 days.
+# Repository secrets (Settings > Secrets and variables > Actions):
+#   BACKUP_DATABASE_URL  Render dashboard > buildsim-db > Connect > External Database URL
+#   BACKUP_PASSPHRASE    a long random passphrase. Keep a copy in your password manager:
+#                        without it no backup can be restored.
+# Unset secrets = skipped. Restore with scripts/restore-db.sh. The dump is encrypted before upload
+# because artifacts of a public repository can be downloaded by any signed-in GitHub user.
+on:
+  schedule:
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Dump, check and encrypt
+        id: dump
+        env:
+          DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          if [ -z "$DATABASE_URL" ] || [ -z "$PASSPHRASE" ]; then
+            echo "::notice::BACKUP_DATABASE_URL / BACKUP_PASSPHRASE not set; skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          set -euo pipefail
+          stamp=$(date -u +%Y%m%d-%H%M)
+          mkdir -p out
+          # the client must be at least the server's major version (render.yaml pins Postgres 17)
+          docker run --rm -e DATABASE_URL postgres:17 \
+            sh -c 'pg_dump --format=custom --no-owner --no-privileges "$DATABASE_URL"' > db.dump
+          # refuse to keep a dump that is empty or lacks our tables
+          docker run --rm -v "$PWD:/w" postgres:17 pg_restore --list /w/db.dump > toc.txt
+          grep -q 'TABLE DATA public users' toc.txt
+          grep -q 'TABLE DATA public projects' toc.txt
+          gpg --batch --yes --pinentry-mode loopback --passphrase-file <(printf %s "$PASSPHRASE") \
+            --symmetric --cipher-algo AES256 -o "out/buildsim-db-$stamp.dump.gpg" db.dump
+          rm -f db.dump toc.txt
+          (cd out && sha256sum ./*.gpg > SHA256SUMS)
+          echo "name=buildsim-db-$stamp" >> "$GITHUB_OUTPUT"
+      - if: steps.dump.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.dump.outputs.name }}
+          path: out/
+          retention-days: 30
+          if-no-files-found: error

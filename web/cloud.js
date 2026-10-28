@@ -13,10 +13,15 @@ export class CloudError extends Error {
   get rateLimited() { return this.status === 429; }
 }
 
+/** An emailed link in the URL hash: `#reset=<token>` or `#verify=<token>` -> {kind, token}, else null. */
+export function linkFromHash(hash) {
+  const m = /^#(reset|verify)=([0-9a-f]{16,128})$/i.exec(String(hash || '').trim());
+  return m ? { kind: m[1].toLowerCase(), token: m[2] } : null;
+}
 /** The token from an emailed reset link (`#reset=<token>`), or null. */
 export function resetTokenFromHash(hash) {
-  const m = /^#reset=([0-9a-f]{16,128})$/i.exec(String(hash || '').trim());
-  return m ? m[1] : null;
+  const l = linkFromHash(hash);
+  return l && l.kind === 'reset' ? l.token : null;
 }
 
 // localStorage can be missing or throw (private mode, blocked storage): never let that break the app
@@ -63,6 +68,14 @@ export function createCloud({ base, fetch: f, storage } = {}) {
     requestReset: email => req('POST', '/auth/password-reset', { email }),
     /** Sets a new password from a reset-link token; signs the account out everywhere */
     async confirmReset(token, password) { await req('POST', '/auth/password-reset/confirm', { token, password }); setToken(null); },
+    /** Confirms the address from an emailed `#verify=` link; works signed in or not */
+    verifyEmail: token => req('POST', '/auth/verify', { token }),
+    /** Mails a fresh verification link (202), or 204 when already verified; 503 without email */
+    resendVerification: () => req('POST', '/auth/verify/resend'),
+    /** Everything the server stores about this account, as an object (see GET /api/me/export) */
+    exportData: () => req('GET', '/me/export'),
+    /** Deletes the account and every project it owns; the password is checked again (400 if wrong) */
+    async deleteAccount(password) { await req('DELETE', '/me', { password }); setToken(null); },
     async logout() { try { await req('POST', '/auth/logout'); } catch (_) { /* token dropped regardless */ } setToken(null); },
     me: () => req('GET', '/me'),
     list: () => req('GET', '/projects'),

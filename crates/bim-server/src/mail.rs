@@ -79,3 +79,17 @@ impl Mailer for SmtpMailer {
         })
     }
 }
+
+/// Sends without blocking the request; failures are logged (and reach Sentry when configured).
+pub fn send_in_background(
+    mailer: std::sync::Arc<dyn Mailer>,
+    to: String,
+    subject: &'static str,
+    body: String,
+) {
+    tokio::spawn(async move {
+        if let Err(e) = mailer.send(&to, subject, &body).await {
+            tracing::error!("email \"{subject}\" failed: {e}");
+        }
+    });
+}

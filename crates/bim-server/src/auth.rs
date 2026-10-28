@@ -1,5 +1,6 @@
 //! Accounts and bearer-token sessions: argon2 passwords, sha256-hashed random tokens, rate-limited
-//! login/register, and emailed single-use password-reset links.
+//! login/register, emailed single-use password-reset links, and email verification on sign-up
+//! (see `account`).
 
 use crate::error::{ApiError, ApiJson};
 use crate::ratelimit::ClientIp;
@@ -27,6 +28,9 @@ const MAX_PASSWORD: usize = 1024;
 pub struct User {
     pub id: Uuid,
     pub email: String,
+    /// The address has been proven by a verification or password-reset link (or the account
+    /// predates verification).
+    pub email_verified: bool,
 }
 
 #[derive(Deserialize)]
@@ -88,23 +92,29 @@ impl FromRequestParts<AppState> for AuthUser {
             .filter(|t| !t.is_empty())
             .ok_or(ApiError::Unauthorized("missing bearer token"))?;
         let token_hash = hash_token(token);
-        let row: Option<(Uuid, String)> = sqlx::query_as(
-            "SELECT u.id, u.email FROM sessions s JOIN users u ON u.id = s.user_id
+        let row: Option<(Uuid, String, bool)> = sqlx::query_as(
+            "SELECT u.id, u.email, u.email_verified_at IS NOT NULL
+             FROM sessions s JOIN users u ON u.id = s.user_id
              WHERE s.token_hash = $1 AND s.expires_at > now()",
         )
         .bind(&token_hash)
         .fetch_optional(&state.db)
         .await?;
-        let (id, email) = row.ok_or(ApiError::Unauthorized("invalid or expired token"))?;
+        let (id, email, email_verified) =
+            row.ok_or(ApiError::Unauthorized("invalid or expired token"))?;
         Ok(AuthUser {
-            user: User { id, email },
+            user: User {
+                id,
+                email,
+                email_verified,
+            },
             token_hash,
         })
     }
 }
 
 /// 32 random bytes, hex-encoded.
-fn random_token() -> String {
+pub(crate) fn random_token() -> String {
     let mut bytes = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut bytes);
     hex::encode(bytes)
@@ -151,7 +161,7 @@ async fn hash_password(password: String) -> Result<String, ApiError> {
     .map_err(|e| ApiError::Internal(format!("join: {e}")))?
 }
 
-async fn verify_password(password: String, hash: String) -> Result<bool, ApiError> {
+pub(crate) async fn verify_password(password: String, hash: String) -> Result<bool, ApiError> {
     tokio::task::spawn_blocking(move || {
         let parsed =
             PasswordHash::new(&hash).map_err(|e| ApiError::Internal(format!("argon2: {e}")))?;
@@ -163,7 +173,9 @@ async fn verify_password(password: String, hash: String) -> Result<bool, ApiErro
     .map_err(|e| ApiError::Internal(format!("join: {e}")))?
 }
 
-/// `POST /api/auth/register` -> 201 `{user, token}`; 409 if the email is taken.
+/// `POST /api/auth/register` -> 201 `{user, token}`; 409 if the email is taken. When email is
+/// configured, also mails a verification link (the account works meanwhile, but nobody can share a
+/// project with it until it is verified).
 pub async fn register(
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
@@ -188,11 +200,16 @@ pub async fn register(
     if inserted.rows_affected() == 0 {
         return Err(ApiError::Conflict("email already registered"));
     }
+    crate::account::send_verification(&state, id, &email).await?;
     let token = new_session(&state, id).await?;
     Ok((
         StatusCode::CREATED,
         Json(AuthResponse {
-            user: User { id, email },
+            user: User {
+                id,
+                email,
+                email_verified: false,
+            },
             token,
         }),
     ))
@@ -223,12 +240,13 @@ pub async fn login(
     if c.password.chars().count() > MAX_PASSWORD {
         return Err(fail());
     }
-    let row: Option<(Uuid, String)> =
-        sqlx::query_as("SELECT id, password_hash FROM users WHERE email = $1")
-            .bind(&email)
-            .fetch_optional(&state.db)
-            .await?;
-    let Some((id, hash)) = row else {
+    let row: Option<(Uuid, String, bool)> = sqlx::query_as(
+        "SELECT id, password_hash, email_verified_at IS NOT NULL FROM users WHERE email = $1",
+    )
+    .bind(&email)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some((id, hash, email_verified)) = row else {
         return Err(fail());
     };
     if !verify_password(c.password, hash).await? {
@@ -240,7 +258,11 @@ pub async fn login(
         .await?;
     let token = new_session(&state, id).await?;
     Ok(Json(AuthResponse {
-        user: User { id, email },
+        user: User {
+            id,
+            email,
+            email_verified,
+        },
         token,
     }))
 }
@@ -307,21 +329,15 @@ pub async fn reset_request(
              {base}/#reset={token}\n\n\
              If this wasn't you, ignore this email; your password is unchanged."
         );
-        // sent in the background: the response must not wait on (or reveal) SMTP
-        tokio::spawn(async move {
-            if let Err(e) = mailer
-                .send(&email, "Reset your buildsim password", &body)
-                .await
-            {
-                tracing::error!("password-reset email failed: {e}");
-            }
-        });
+        // in the background: the response must not wait on (or reveal) SMTP
+        crate::mail::send_in_background(mailer, email, "Reset your buildsim password", body);
     }
     Ok(StatusCode::ACCEPTED)
 }
 
 /// `POST /api/auth/password-reset/confirm {token, password}` -> 204. Uses up the token, sets the
-/// password and signs the account out everywhere; 400 for an unknown, used or expired token.
+/// password, marks the email verified (the link proved it) and signs the account out everywhere;
+/// 400 for an unknown, used or expired token.
 pub async fn reset_confirm(
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
@@ -343,7 +359,10 @@ pub async fn reset_confirm(
     let user = user.ok_or(ApiError::BadRequest(
         "this reset link is invalid or has expired".into(),
     ))?;
-    sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+    sqlx::query(
+        "UPDATE users SET password_hash = $1, email_verified_at = COALESCE(email_verified_at, now())
+         WHERE id = $2",
+    )
         .bind(&hash)
         .bind(user)
         .execute(&mut *tx)
@@ -360,9 +379,20 @@ pub async fn reset_confirm(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `GET /api/me` -> `{id, email}`.
-pub async fn me(auth: AuthUser) -> Json<User> {
-    Json(auth.user)
+#[derive(Serialize)]
+pub struct Me {
+    #[serde(flatten)]
+    user: User,
+    /// Whether this server sends verification email (false: verification is not enforced).
+    verification_required: bool,
+}
+
+/// `GET /api/me` -> `{id, email, email_verified, verification_required}`.
+pub async fn me(State(state): State<AppState>, auth: AuthUser) -> Json<Me> {
+    Json(Me {
+        user: auth.user,
+        verification_required: crate::account::email_enabled(&state).is_some(),
+    })
 }
 
 #[cfg(test)]
