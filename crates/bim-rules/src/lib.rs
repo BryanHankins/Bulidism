@@ -25,11 +25,18 @@ pub enum Check {
     DoorMinHeight {
         min_height_m: f32,
     },
+    /// Riser, tread and width of each flight. Width: `min_width_m`, or `min_width_m_low_load`
+    /// where the story the stair arrives at has an occupant load of at most
+    /// `low_load_max_occupants`.
     StairGeometry {
         max_riser_m: f32,
         min_riser_m: f32,
         min_tread_m: f32,
         min_width_m: f32,
+        #[serde(default)]
+        min_width_m_low_load: Option<f32>,
+        #[serde(default)]
+        low_load_max_occupants: Option<u32>,
     },
     /// Single door leaf wider than `max_leaf_width_m`.
     DoorMaxLeafWidth {
@@ -64,6 +71,15 @@ pub enum Check {
         low_load_max_occupants: Option<u32>,
         #[serde(default)]
         max_m_low_load: Option<f32>,
+    },
+    /// Exit separation: where a room needs two exit access doorways (occupant load over its
+    /// occupancy's single-exit limit), or a story needs two exits (load over the code
+    /// summary's single-exit screen), the two farthest apart must be at least `fraction`
+    /// (`fraction_sprinklered` when sprinklered) of the area's maximum overall diagonal apart,
+    /// measured between door edges. Uses the plan; rooms with no shape are not checked.
+    ExitSeparation {
+        fraction: f32,
+        fraction_sprinklered: f32,
     },
     /// Occupant load = area / factor; spaces over the single-exit limit with one exit are flagged.
     OccupantLoadExits {
@@ -276,6 +292,26 @@ pub fn egress_exits<L: Lookup + ?Sized>(p: &L, s: &Space) -> usize {
     ids.len()
 }
 
+/// Exits from space `i` (index into `p.spaces`): its exit access doors found on the plan when
+/// the egress analysis covered it, else the egress doors assigned to it by hand. The flag says
+/// which: true = from the plan.
+pub fn room_exits(p: &Project, i: usize, egress: Option<&bim_egress::Analysis>) -> (usize, bool) {
+    match egress.and_then(|a| a.spaces.get(i)).filter(|e| e.analyzed) {
+        Some(e) => (e.exit_access_doors.len(), true),
+        None => (egress_exits(&ProjectIndex::new(p), &p.spaces[i]), false),
+    }
+}
+
+/// Clear width an egress door gives: one leaf less the stop/leaf deduction; for a pair, one
+/// of its leaves (the code asks that one leaf alone gives the clear width); for an opening
+/// with no door, all of it.
+pub fn leaf_clear_width(width: f32, leaves: u32, deduction: f32) -> f32 {
+    match leaves {
+        0 => width,
+        n => (width / n as f32 - deduction).max(0.0),
+    }
+}
+
 impl RuleSet {
     pub fn from_json(s: &str) -> Result<Self, RuleError> {
         Ok(serde_json::from_str(s)?)
@@ -289,6 +325,19 @@ impl RuleSet {
                 area_per_occupant_m2,
                 ..
             } if occupancy == occ && area_per_occupant_m2 > 0.0 => Some(area_per_occupant_m2),
+            _ => None,
+        })
+    }
+
+    /// Most occupants a room of this occupancy may have with a single exit, from its
+    /// occupant-load rule.
+    pub fn single_exit_limit(&self, occ: Occupancy) -> Option<u32> {
+        self.rules.iter().find_map(|r| match r.check {
+            Check::OccupantLoadExits {
+                occupancy,
+                max_occupants_single_exit,
+                ..
+            } if occupancy == occ => Some(max_occupants_single_exit),
             _ => None,
         })
     }
@@ -312,7 +361,10 @@ impl RuleSet {
         self.rules.iter().any(|r| {
             matches!(
                 r.check,
-                Check::TravelDistance { .. } | Check::CommonPath { .. }
+                Check::TravelDistance { .. }
+                    | Check::CommonPath { .. }
+                    | Check::ExitSeparation { .. }
+                    | Check::OccupantLoadExits { .. }
             )
         })
     }
@@ -330,6 +382,19 @@ impl RuleSet {
         egress: Option<&bim_egress::Analysis>,
     ) -> Vec<Advisory> {
         let mut out = Vec::new();
+        // door rules skip doors inside one room (toilet stalls, cupboards): not on any route
+        // and, where rooms are modelled, doors with no room on either side (site gates):
+        // readiness lists those as unchecked
+        let rooms_known = egress.is_some_and(|a| a.spaces.iter().any(|s| s.analyzed));
+        let on_route = |id: ElementId| {
+            !egress.is_some_and(|a| {
+                a.internal_doors.contains(&id)
+                    || (rooms_known
+                        && a.doors
+                            .iter()
+                            .any(|d| d.id == id && d.sides == [None, None]))
+            })
+        };
         // findings with no measured value (the `fail` closure holds `out`)
         let mut unmeasured = Vec::new();
         for r in &self.rules {
@@ -367,19 +432,39 @@ impl RuleSet {
                         if let ElementKind::Door {
                             width,
                             is_egress: true,
+                            leaves,
                             ..
                         } = e.kind
                         {
-                            let clear = width - ded;
+                            // a pair: one leaf must give the clear width; an opening: all of it
+                            let clear = leaf_clear_width(width, leaves, *ded);
+                            let how = match leaves {
+                                0 => format!("opening {width:.3} m"),
+                                1 => format!("leaf {width:.3} m - {ded:.3} m"),
+                                n => format!(
+                                    "one of {n} leaves {:.3} m - {ded:.3} m",
+                                    width / n as f32
+                                ),
+                            };
                             if clear < *lim {
-                                fail(&e.name, Some(e.id), "egress door clear width", clear, Min, *lim, Length,
-                                    format!("egress door clear width {clear:.3} m (leaf {width:.3} m - {ded:.3} m) < {lim:.3} m"));
+                                fail(
+                                    &e.name,
+                                    Some(e.id),
+                                    "egress door clear width",
+                                    clear,
+                                    Min,
+                                    *lim,
+                                    Length,
+                                    format!(
+                                        "egress door clear width {clear:.3} m ({how}) < {lim:.3} m"
+                                    ),
+                                );
                             }
                         }
                     }
                 }
                 Check::DoorMinHeight { min_height_m: lim } => {
-                    for e in &p.elements {
+                    for e in p.elements.iter().filter(|e| on_route(e.id)) {
                         if let ElementKind::Door { height, .. } = e.kind {
                             if height < *lim {
                                 fail(
@@ -399,18 +484,19 @@ impl RuleSet {
                 Check::DoorMaxLeafWidth {
                     max_leaf_width_m: lim,
                 } => {
-                    for e in &p.elements {
-                        if let ElementKind::Door { width, .. } = e.kind {
-                            if width > *lim {
+                    for e in p.elements.iter().filter(|e| on_route(e.id)) {
+                        if let ElementKind::Door { width, leaves, .. } = e.kind {
+                            let leaf = width / leaves.max(1) as f32;
+                            if leaves > 0 && leaf > *lim {
                                 fail(
                                     &e.name,
                                     Some(e.id),
                                     "door leaf width",
-                                    width,
+                                    leaf,
                                     Max,
                                     *lim,
                                     Length,
-                                    format!("door leaf width {width:.3} m > {lim:.3} m"),
+                                    format!("door leaf width {leaf:.3} m > {lim:.3} m"),
                                 );
                             }
                         }
@@ -431,6 +517,8 @@ impl RuleSet {
                     min_riser_m,
                     min_tread_m,
                     min_width_m,
+                    min_width_m_low_load,
+                    low_load_max_occupants,
                 } => {
                     for e in &p.elements {
                         let ElementKind::Stair {
@@ -496,16 +584,48 @@ impl RuleSet {
                                 format!("tread {tread:.3} m < {min_tread_m:.3} m"),
                             );
                         }
-                        if width < *min_width_m {
+                        // the story the stair serves: the first level at or above its head
+                        let top = match e.kind {
+                            ElementKind::Stair {
+                                base, total_rise, ..
+                            } => base.y + total_rise,
+                            _ => 0.0,
+                        };
+                        let served = p
+                            .levels
+                            .iter()
+                            .filter(|l| l.elevation_m >= top - 0.35)
+                            .min_by(|a, b| a.elevation_m.total_cmp(&b.elevation_m));
+                        let served_load: Option<u32> = served.map(|l| {
+                            p.spaces
+                                .iter()
+                                .filter(|s| s.level == Some(l.id))
+                                .filter_map(|s| {
+                                    self.occupant_factor(s.occupancy)
+                                        .map(|f| (s.area_m2() / f).ceil() as u32)
+                                })
+                                .sum()
+                        });
+                        let (min_w, why) =
+                            match (min_width_m_low_load, low_load_max_occupants, served_load) {
+                                (Some(w), Some(n), Some(l)) if l <= *n => {
+                                    (*w, format!(" (occupant load {l} served)"))
+                                }
+                                (_, _, Some(l)) => {
+                                    (*min_width_m, format!(" (occupant load {l} served)"))
+                                }
+                                _ => (*min_width_m, String::new()),
+                            };
+                        if width < min_w {
                             fail(
                                 &e.name,
                                 Some(e.id),
                                 "stair width",
                                 width,
                                 Min,
-                                *min_width_m,
+                                min_w,
                                 Length,
-                                format!("stair width {width:.3} m < {min_width_m:.3} m"),
+                                format!("stair width {width:.3} m < {min_w:.3} m{why}"),
                             );
                         }
                     }
@@ -636,15 +756,104 @@ impl RuleSet {
                         }
                     }
                 }
+                Check::ExitSeparation {
+                    fraction,
+                    fraction_sprinklered,
+                } => {
+                    let Some(eg) = egress else { continue };
+                    let spr = p.building.sprinklered;
+                    let f = if spr {
+                        *fraction_sprinklered
+                    } else {
+                        *fraction
+                    };
+                    let how = if spr {
+                        "sprinklered"
+                    } else {
+                        "not sprinklered"
+                    };
+                    let link = |id: &ElementId| eg.doors.iter().find(|d| d.id == *id);
+                    let widest = |ds: &[&bim_egress::DoorLink]| {
+                        let mut m = 0.0f32;
+                        for (k, a) in ds.iter().enumerate() {
+                            for b in &ds[k + 1..] {
+                                m = m.max(bim_egress::door_separation(a, b));
+                            }
+                        }
+                        m
+                    };
+                    let load = |s: &Space| {
+                        self.occupant_factor(s.occupancy)
+                            .map(|fa| (s.area_m2() / fa).ceil() as u32)
+                    };
+                    // rooms that need two ways out
+                    for (s, e) in p.spaces.iter().zip(&eg.spaces) {
+                        let (Some(l), Some(max1)) = (load(s), self.single_exit_limit(s.occupancy))
+                        else {
+                            continue;
+                        };
+                        let ds: Vec<_> = e.exit_access_doors.iter().filter_map(link).collect();
+                        if !e.analyzed || e.stair || l <= max1 || ds.len() < 2 {
+                            continue;
+                        }
+                        let diag = bim_egress::diagonal(&s.polygon().unwrap_or_default());
+                        let (sep, need) = (widest(&ds), f * diag);
+                        if sep + 1e-4 < need {
+                            fail(&s.name, None, "exit separation", sep, Min, need, Length,
+                                format!("exit access doors {sep:.2} m apart; {need:.2} m needed ({f:.3} of the {diag:.2} m diagonal, {how})"));
+                        }
+                    }
+                    // stories that need two exits
+                    if let Some(c) = &self.code_summary {
+                        let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+                        if p.levels.is_empty() {
+                            groups.push(("Building".into(), (0..p.spaces.len()).collect()));
+                        }
+                        for lv in &p.levels {
+                            groups.push((
+                                lv.name.clone(),
+                                (0..p.spaces.len())
+                                    .filter(|&i| p.spaces[i].level == Some(lv.id))
+                                    .collect(),
+                            ));
+                        }
+                        for (name, rooms) in groups {
+                            let rooms: Vec<usize> = rooms
+                                .into_iter()
+                                .filter(|&i| eg.spaces[i].analyzed)
+                                .collect();
+                            let story_load: u32 =
+                                rooms.iter().filter_map(|&i| load(&p.spaces[i])).sum();
+                            let exits = eg.exits_of(&rooms);
+                            if story_load <= c.single_exit_screen_load || exits.len() < 2 {
+                                continue;
+                            }
+                            let corners: Vec<[f32; 2]> = rooms
+                                .iter()
+                                .flat_map(|&i| p.spaces[i].polygon().unwrap_or_default())
+                                .collect();
+                            let diag = bim_egress::diagonal(&corners);
+                            let (sep, need) = (widest(&exits), f * diag);
+                            if sep + 1e-4 < need {
+                                fail(&name, None, "exit separation", sep, Min, need, Length,
+                                    format!("exits from {name} {sep:.2} m apart; {need:.2} m needed ({f:.3} of the {diag:.2} m diagonal, {how})"));
+                            }
+                        }
+                    }
+                }
                 Check::OccupantLoadExits {
                     occupancy,
                     area_per_occupant_m2,
                     max_occupants_single_exit,
                 } => {
-                    let ix = ProjectIndex::new(p);
-                    for s in p.spaces.iter().filter(|s| s.occupancy == *occupancy) {
+                    for (i, s) in p
+                        .spaces
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, s)| s.occupancy == *occupancy)
+                    {
                         let load = (s.area_m2() / area_per_occupant_m2).ceil() as u32;
-                        let exits = egress_exits(&ix, s);
+                        let (exits, _) = room_exits(p, i, egress);
                         if load > *max_occupants_single_exit && exits < 2 {
                             fail(&s.name, None, &format!("exits for an occupant load of {load}"), exits as f32, Min, 2.0, Count,
                                 format!("occupant load {load} > {max_occupants_single_exit} with {exits} exit(s)"));
@@ -826,6 +1035,7 @@ mod tests {
                 width: 1.5,
                 height: 2.1,
                 is_egress: false,
+                leaves: 1,
             },
             Discipline::Architectural,
             PhaseId(3),
@@ -838,6 +1048,7 @@ mod tests {
                 total_rise: 4.5,
                 width: 1.2,
                 riser_count: 25,
+                along_z: false,
             },
             Discipline::Architectural,
             PhaseId(3),
@@ -959,5 +1170,135 @@ mod tests {
         // a space with only an area is not checked
         p.spaces[0].bounds = None;
         assert_eq!(egress_findings(&p), vec![]);
+    }
+
+    #[test]
+    fn exit_separation() {
+        let only = |p: &Project| {
+            RuleSet::from_json(RS)
+                .unwrap()
+                .evaluate(p)
+                .into_iter()
+                .filter(|a| a.rule_id == "egress.exit_separation")
+                .map(|a| (a.subject, a.measured.unwrap(), a.limit.unwrap()))
+                .collect::<Vec<_>>()
+        };
+        // the sample: 7 occupants, one exit would do, nothing to check
+        assert_eq!(only(&Project::sample()), vec![]);
+        // 70 m deep, 61 occupants: two exits at opposite ends, far apart
+        let mut p = deep_office();
+        assert_eq!(only(&p), vec![]);
+        // the second exit moved next to the main entry (south wall, 7.0..7.9 m)
+        let south = p
+            .elements
+            .iter()
+            .find(|e| e.name == "South wall")
+            .unwrap()
+            .id;
+        for e in &mut p.elements {
+            if let ElementKind::Door { host, offset, .. } = &mut e.kind {
+                if e.name == "Rear exit" {
+                    *host = south;
+                    *offset = 7.0;
+                }
+            }
+        }
+        let f = only(&p);
+        // centres 5.375 and 7.45 m, less half of 0.75 and 0.9: 1.25 m apart; the room's and
+        // the story's diagonal is sqrt(12^2 + 70^2) = 71.02 m, half of it 35.51 m
+        assert_eq!(f.len(), 2, "{f:?}");
+        assert_eq!(f[0].0, "Open office");
+        assert_eq!(f[1].0, "Level 1");
+        for (_, sep, need) in &f {
+            assert!(
+                (sep - 1.25).abs() < 1e-3 && (need - 35.51).abs() < 0.01,
+                "{sep} {need}"
+            );
+        }
+        // sprinklered: a third of the diagonal
+        p.building.sprinklered = true;
+        assert!((only(&p)[0].2 - 0.333 * 71.02).abs() < 0.01);
+    }
+
+    #[test]
+    fn door_leaves_and_stair_width_for_small_loads() {
+        let rs = RuleSet::from_json(RS).unwrap();
+        let mut p = Project::sample();
+        let ids = |p: &Project, rule: &str| {
+            rs.evaluate(p)
+                .into_iter()
+                .filter(|a| a.rule_id == rule)
+                .map(|a| a.subject)
+                .collect::<Vec<_>>()
+        };
+        // a 1.8 m pair: each leaf 0.9 m, within 48 in; one leaf less its stop gives 0.836 m clear
+        for e in &mut p.elements {
+            if let ElementKind::Door { width, leaves, .. } = &mut e.kind {
+                if e.name == "Main entry" {
+                    *width = 1.8;
+                    *leaves = 2;
+                }
+            }
+        }
+        assert!(ids(&p, "door.max_leaf_width").is_empty());
+        assert!(!ids(&p, "egress.door.min_clear_width").contains(&"Main entry".to_string()));
+        // as one leaf it is too wide
+        for e in &mut p.elements {
+            if let ElementKind::Door { leaves, .. } = &mut e.kind {
+                if e.name == "Main entry" {
+                    *leaves = 1;
+                }
+            }
+        }
+        assert_eq!(ids(&p, "door.max_leaf_width"), vec!["Main entry"]);
+        // a cased opening: no leaf to check, its full width is clear
+        for e in &mut p.elements {
+            if let ElementKind::Door { leaves, width, .. } = &mut e.kind {
+                if e.name == "Main entry" {
+                    *leaves = 0;
+                    *width = 0.82;
+                }
+            }
+        }
+        assert!(ids(&p, "door.max_leaf_width").is_empty());
+        assert!(!ids(&p, "egress.door.min_clear_width").contains(&"Main entry".to_string()));
+        // the sample stair narrowed to 1.0 m (to a mezzanine with no level of its own) needs 44 in;
+        // with a level at its head holding 7 occupants, 36 in is enough
+        let stair = |p: &Project| {
+            rs.evaluate(p)
+                .into_iter()
+                .filter(|a| {
+                    a.rule_id == "stair.geometry" && a.check.as_deref() == Some("stair width")
+                })
+                .count()
+        };
+        let mut q = Project::sample();
+        for e in &mut q.elements {
+            if let ElementKind::Stair { width, .. } = &mut e.kind {
+                *width = 1.0;
+            }
+        }
+        let (top, w) = q
+            .elements
+            .iter()
+            .find_map(|e| match e.kind {
+                ElementKind::Stair {
+                    base,
+                    total_rise,
+                    width,
+                    ..
+                } => Some((base.y + total_rise, width)),
+                _ => None,
+            })
+            .unwrap();
+        assert!((0.914..1.118).contains(&w), "{w}");
+        assert_eq!(stair(&q), 1);
+        q.levels.push(Level {
+            id: LevelId(9),
+            name: "Mezzanine".into(),
+            elevation_m: top,
+        });
+        q.spaces[0].level = Some(LevelId(9));
+        assert_eq!(stair(&q), 0);
     }
 }

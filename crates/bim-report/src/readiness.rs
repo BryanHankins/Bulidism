@@ -38,7 +38,9 @@ pub fn check(
         let mut no_factor: Vec<String> = p
             .spaces
             .iter()
-            .filter(|s| rs.occupant_factor(s.occupancy).is_none())
+            .filter(|s| {
+                s.occupancy != Occupancy::Unoccupied && rs.occupant_factor(s.occupancy).is_none()
+            })
             .map(|s| format!("{} ({:?})", s.name, s.occupancy))
             .collect();
         no_factor.sort();
@@ -72,17 +74,24 @@ pub fn check(
             })
         )
     };
+    // rooms with a plan shape get their exits from the plan; the rest need them assigned
+    let on_plan = |i: usize| analysis.is_some_and(|a| a.spaces[i].analyzed);
     out.extend(item(
         "space.no_exits",
         "warning",
-        "spaces with no egress door assigned: exit counts and capacity read as 0 (Edit → Spaces)"
+        "spaces with no plan shape and no egress door assigned: exit counts and capacity read as 0 (draw the room, or assign doors in Edit → Spaces)"
             .into(),
         names(
             &mut p
                 .spaces
                 .iter()
-                .filter(|s| !s.egress_doors.iter().any(egress))
-                .map(|s| &s.name),
+                .enumerate()
+                .filter(|(i, s)| {
+                    !on_plan(*i)
+                        && s.occupancy != Occupancy::Unoccupied
+                        && !s.egress_doors.iter().any(egress)
+                })
+                .map(|(_, s)| &s.name),
         ),
     ));
     let doors: Vec<&Element> = p
@@ -148,7 +157,7 @@ pub fn check(
                         .spaces
                         .iter()
                         .zip(&eg.spaces)
-                        .filter(|(_, e)| !e.analyzed)
+                        .filter(|(s, e)| !e.analyzed && s.occupancy != Occupancy::Unoccupied)
                         .map(|(s, _)| &s.name),
                 ),
             ));
@@ -157,7 +166,7 @@ pub fn check(
             out.extend(item(
                 "door.no_room",
                 "info",
-                "doors with no room on either side: not on any egress route (is the room drawn as a space, on the door's level?)".into(),
+                "doors with no room on either side: not on any egress route, and not checked by the door rules (is the room drawn as a space, on the door's level?)".into(),
                 names(
                     &mut eg
                         .doors
@@ -176,7 +185,9 @@ pub fn check(
             &mut p
                 .elements
                 .iter()
-                .filter(|e| e.cost_code.is_empty())
+                .filter(|e| {
+                    e.cost_code.is_empty() && !matches!(e.kind, ElementKind::Door { leaves: 0, .. })
+                })
                 .map(|e| &e.name),
         ),
     ));

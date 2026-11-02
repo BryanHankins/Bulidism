@@ -1,0 +1,151 @@
+{
+  "counts": {
+    "doors": 249,
+    "egress_doors": 15,
+    "levels": 4,
+    "passages": 16,
+    "slabs": 3,
+    "spaces": 269,
+    "spaces_with_outline": 266,
+    "stairs": 6,
+    "walls": 1111
+  },
+  "cut_off": [
+    "MECH. PENTHOUSE",
+    "TOILET"
+  ],
+  "longest_walk": [
+    "TOILET",
+    36.1
+  ],
+  "findings": [
+    {
+      "rule": "door.max_leaf_width",
+      "subject": "M_Curtain Wall Dbl Chain Link:M_Curtain Wall Dbl Chain Link:M_Curtain Wall Dbl Chain Link:346969",
+      "check": "door leaf width",
+      "measured": 1.351,
+      "verdict": "rule_limit",
+      "note": "gates from an outdoor mechanical yard modelled as a space; whether the 1010.1.1 door limits apply to a yard gate is a reviewer's call"
+    },
+    {
+      "rule": "door.max_leaf_width",
+      "subject": "M_Curtain Wall Dbl Chain Link:M_Curtain Wall Dbl Chain Link:M_Curtain Wall Dbl Chain Link:346973",
+      "check": "door leaf width",
+      "measured": 1.351,
+      "verdict": "rule_limit",
+      "note": "gates from an outdoor mechanical yard modelled as a space; whether the 1010.1.1 door limits apply to a yard gate is a reviewer's call"
+    },
+    {
+      "rule": "door.max_leaf_width",
+      "subject": "M_Single-Flush:1.220 x 2134mm Exterior:1.220 x 2134mm Exterior:233580",
+      "check": "door leaf width",
+      "measured": 1.22,
+      "verdict": "rule_limit",
+      "note": "a 1220 mm metric leaf is a nominal 48 in leaf; the code says 48 in nominal, the check compares with 1219.2 mm exactly"
+    },
+    {
+      "rule": "door.max_leaf_width",
+      "subject": "M_Single-Flush:1.220 x 2134mm:1.220 x 2134mm:230394",
+      "check": "door leaf width",
+      "measured": 1.22,
+      "verdict": "rule_limit",
+      "note": "a 1220 mm metric leaf is a nominal 48 in leaf; the code says 48 in nominal, the check compares with 1219.2 mm exactly"
+    },
+    {
+      "rule": "door.min_height",
+      "subject": "M_Curtain Wall Dbl Chain Link:M_Curtain Wall Dbl Chain Link:M_Curtain Wall Dbl Chain Link:346969",
+      "check": "door height",
+      "measured": 1.964,
+      "verdict": "rule_limit",
+      "note": "gates from an outdoor mechanical yard modelled as a space; whether the 1010.1.1 door limits apply to a yard gate is a reviewer's call"
+    },
+    {
+      "rule": "door.min_height",
+      "subject": "M_Curtain Wall Dbl Chain Link:M_Curtain Wall Dbl Chain Link:M_Curtain Wall Dbl Chain Link:346973",
+      "check": "door height",
+      "measured": 1.964,
+      "verdict": "rule_limit",
+      "note": "gates from an outdoor mechanical yard modelled as a space; whether the 1010.1.1 door limits apply to a yard gate is a reviewer's call"
+    },
+    {
+      "rule": "egress.capacity.doors",
+      "subject": "Roof - Main",
+      "check": "egress door capacity from Roof - Main (occupant load 5)",
+      "measured": 0.0,
+      "verdict": "model_gap",
+      "note": "the only occupied space on the roof level is the mechanical penthouse, and the IFC has no door or stair to it"
+    },
+    {
+      "rule": "egress.capacity.stairs",
+      "subject": "Roof - Main",
+      "check": "stair capacity from Roof - Main (occupant load 5)",
+      "measured": 0.0,
+      "verdict": "model_gap",
+      "note": "the only occupied space on the roof level is the mechanical penthouse, and the IFC has no door or stair to it"
+    },
+    {
+      "rule": "egress.travel_distance.business",
+      "subject": "MECH. PENTHOUSE",
+      "check": "exit access travel distance",
+      "measured": null,
+      "verdict": "model_gap",
+      "note": "no door or stair to the roof-level mechanical penthouse in the IFC"
+    },
+    {
+      "rule": "egress.travel_distance.business",
+      "subject": "TOILET",
+      "check": "exit access travel distance",
+      "measured": null,
+      "verdict": "model_gap",
+      "note": "the IFC has no door into this first-floor toilet (only second-floor doors above it)"
+    },
+    {
+      "rule": "stair.geometry",
+      "subject": "Stair:Concrete Pan - 180mm Max Riser 280mm Tread:221039:1",
+      "check": "stair width",
+      "measured": 1.1,
+      "verdict": "valid",
+      "note": "the stairs serve the second floor, whose occupant load (spaces at the Business factor) is over 49, so 44 in (1118 mm) applies"
+    },
+    {
+      "rule": "stair.geometry",
+      "subject": "Stair:Concrete Pan - 180mm Max Riser 280mm Tread:221039:2",
+      "check": "stair width",
+      "measured": 1.1,
+      "verdict": "valid",
+      "note": "the stairs serve the second floor, whose occupant load (spaces at the Business factor) is over 49, so 44 in (1118 mm) applies"
+    },
+    {
+      "rule": "stair.geometry",
+      "subject": "Stair:Concrete Pan - 180mm Max Riser 280mm Tread:250693:1",
+      "check": "stair width",
+      "measured": 1.1,
+      "verdict": "valid",
+      "note": "the stairs serve the second floor, whose occupant load (spaces at the Business factor) is over 49, so 44 in (1118 mm) applies"
+    },
+    {
+      "rule": "stair.geometry",
+      "subject": "Stair:Concrete Pan - 180mm Max Riser 280mm Tread:250693:2",
+      "check": "stair width",
+      "measured": 1.1,
+      "verdict": "valid",
+      "note": "the stairs serve the second floor, whose occupant load (spaces at the Business factor) is over 49, so 44 in (1118 mm) applies"
+    },
+    {
+      "rule": "stair.geometry",
+      "subject": "Stair:Concrete Pan - 180mm Max Riser 280mm Tread:251180:1",
+      "check": "stair width",
+      "measured": 1.05,
+      "verdict": "valid",
+      "note": "the stairs serve the second floor, whose occupant load (spaces at the Business factor) is over 49, so 44 in (1118 mm) applies"
+    },
+    {
+      "rule": "stair.geometry",
+      "subject": "Stair:Concrete Pan - 180mm Max Riser 280mm Tread:251180:2",
+      "check": "stair width",
+      "measured": 1.05,
+      "verdict": "valid",
+      "note": "the stairs serve the second floor, whose occupant load (spaces at the Business factor) is over 49, so 44 in (1118 mm) applies"
+    }
+  ]
+}

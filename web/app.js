@@ -103,7 +103,7 @@ function rerun(keepDay = true) {
     lastReport = report;
     $('spaceList').innerHTML = report.spaces.length
       ? report.spaces.map(s => `<div class="row"><span>${esc(s.name)} <small style="color:var(--muted)">${s.occupancy}</small></span><span>${fmtArea(s.area_m2, units)} · ${s.exits} exit${s.exits===1?'':'s'}</span></div>` +
-          (s.outline ? `<div class="row sub"><span>longest walk to an exit</span><span>${s.travel_m == null ? '<b style="color:var(--err)">no route</b>' : `${fmtLen(s.travel_m, units)} · common path ${fmtLen(s.common_path_m, units)}`}</span></div>` : '')).join('')
+          (s.outline && s.occupancy !== 'Unoccupied' ? `<div class="row sub"><span>longest walk to an exit</span><span>${s.travel_m == null ? '<b style="color:var(--err)">no route</b>' : `${fmtLen(s.travel_m, units)} · common path ${fmtLen(s.common_path_m, units)}`}</span></div>` : '')).join('')
       : '<div class="row"><span>No spaces defined</span></div>';
     renderCodeSummary(report.code_summary);
     renderReadiness(report.readiness || []);
@@ -234,7 +234,7 @@ function onViewHandle(id, idx, x, z) {
 }
 
 // ---- spaces ----
-const OCCUPANCIES = ['Assembly','Business','Educational','Residential','Mercantile','Storage','Institutional'];
+const OCCUPANCIES = ['Assembly','Business','Educational','Residential','Mercantile','Storage','Institutional','Unoccupied'];
 // occupancy for new spaces (+ space and the drag tool), remembered per browser
 let spaceOcc = OCCUPANCIES.includes(store.get('buildsim.spaceOcc')) ? store.get('buildsim.spaceOcc') : 'Business';
 function renderSpaces() {
@@ -467,7 +467,7 @@ function renderCodeSummary(c) {
   const mark = (prov, req) => prov + 1e-6 >= req ? '✓' : '<b style="color:var(--err)">✗</b>';
   $('codeSummary').innerHTML = `<div class="row"><span>Total occupant load</span><span>${c.total_occupant_load}</span></div>` +
     c.levels.map(l => `<div class="row"><span>${esc(l.name)} <small style="color:var(--muted)">${l.occupant_load} occ.</small></span>` +
-      `<span>exits ${l.exits_provided}/${l.exits_required} ${l.occupant_load ? mark(l.exits_provided, l.exits_required) : ''} · doors ${fmtLen(l.door_width_provided_m, units)} ${mark(l.door_width_provided_m, l.door_width_required_m)}` +
+      `<span title="${l.exits_from_plan === false ? 'exits assigned by hand (rooms have no plan shape)' : 'exits found on the plan'}">exits ${l.exits_provided}/${l.exits_required}${l.exits_from_plan === false ? '*' : ''} ${l.occupant_load ? mark(l.exits_provided, l.exits_required) : ''} · doors ${fmtLen(l.door_width_provided_m, units)} ${mark(l.door_width_provided_m, l.door_width_required_m)}` +
       `${l.stair_width_required_m == null ? '' : ` · stairs ${mark(l.stair_width_provided_m, l.stair_width_required_m)}`}</span></div>`).join('') +
     (c.plumbing.length ? `<div class="row"><span>Plumbing</span><span>${c.plumbing.map(p => `${p.required} ${esc(p.fixture.toLowerCase())}`).join(', ')}</span></div>` : '') +
     `<div class="row"><small style="color:var(--muted)">Print for the full sheet. Parameters: secondary sources, unverified.</small></div>`;

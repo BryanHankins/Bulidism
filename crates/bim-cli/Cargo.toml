@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 bim-core.workspace = true
 bim-rules.workspace = true
+bim-egress.workspace = true
 bim-takeoff.workspace = true
 bim-report.workspace = true
 bim-ifc.workspace = true

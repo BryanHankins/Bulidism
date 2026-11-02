@@ -531,6 +531,41 @@ fn bounds(p: &[Vec3]) -> Bounds {
     b
 }
 
+/// Total thickness of a material layer set (or its usage), in file units; each listed layer
+/// counts, repeats included.
+fn layer_thickness(f: &StepFile, id: u64) -> Option<f64> {
+    let e = f.entities.get(&id)?;
+    match e.ty.as_str() {
+        "IFCMATERIALLAYERSETUSAGE" => layer_thickness(f, e.arg(0).id()?),
+        "IFCMATERIALLAYERSET" => Some(
+            e.arg(0)
+                .list()
+                .iter()
+                .filter_map(|l| f.entities.get(&l.id()?))
+                .filter(|l| l.ty == "IFCMATERIALLAYER")
+                .filter_map(|l| l.arg(1).num())
+                .sum(),
+        ),
+        _ => None,
+    }
+}
+
+/// Space names that mean nobody occupies or walks through it.
+fn is_unoccupied_name(name: &str) -> bool {
+    let n = name.to_lowercase();
+    n.starts_with("roof")
+        || [
+            "open to below",
+            "void",
+            "shaft",
+            "chase",
+            "plenum",
+            "atrium above",
+        ]
+        .iter()
+        .any(|w| n.contains(w))
+}
+
 fn occupancy_from(s: &str) -> Option<Occupancy> {
     let t = s.trim().to_ascii_uppercase();
     let first = t.chars().next()?;
@@ -624,6 +659,8 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
     // ---- relationships
     let mut void_host: HashMap<u64, u64> = HashMap::new(); // opening -> host element
     let mut fill_opening: HashMap<u64, u64> = HashMap::new(); // door -> opening
+    let mut type_of: HashMap<u64, u64> = HashMap::new(); // occurrence -> its type
+    let mut material_of: HashMap<u64, u64> = HashMap::new(); // element -> its material
     let mut contained_in: HashMap<u64, u64> = HashMap::new(); // element -> spatial structure
     let mut children: HashMap<u64, Vec<u64>> = HashMap::new();
     let mut props: HashMap<u64, Vec<(String, Value)>> = HashMap::new();
@@ -635,6 +672,20 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
             "IFCRELVOIDSELEMENT" => {
                 if let (Some(h), Some(o)) = (e.arg(4).id(), e.arg(5).id()) {
                     void_host.insert(o, h);
+                }
+            }
+            "IFCRELASSOCIATESMATERIAL" => {
+                if let Some(m) = e.arg(5).id() {
+                    for o in e.arg(4).list().iter().filter_map(Value::id) {
+                        material_of.insert(o, m);
+                    }
+                }
+            }
+            "IFCRELDEFINESBYTYPE" => {
+                if let Some(t) = e.arg(5).id() {
+                    for o in e.arg(4).list().iter().filter_map(Value::id) {
+                        type_of.insert(o, t);
+                    }
                 }
             }
             "IFCRELFILLSELEMENT" => {
@@ -766,6 +817,27 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
         found.push((kind, id, pts.into_iter().map(to_model).collect()));
     }
 
+    // openings in walls with nothing filling them: candidates for doorless passages
+    let filled: HashSet<u64> = fill_opening.values().copied().collect();
+    let mut open_ids: Vec<u64> = void_host
+        .iter()
+        .filter(|(o, h)| {
+            !filled.contains(*o)
+                && f.entities
+                    .get(*h)
+                    .is_some_and(|w| kind_of(&w.ty) == Some(Kind::Wall))
+        })
+        .map(|(o, _)| *o)
+        .collect();
+    open_ids.sort_unstable();
+    let unfilled: Vec<(u64, Vec<Vec3>)> = open_ids
+        .into_iter()
+        .filter_map(|o| {
+            let pts = r.product_points(f.entities.get(&o)?);
+            (!pts.is_empty()).then(|| (o, pts.into_iter().map(to_model).collect()))
+        })
+        .collect();
+
     // ---- re-centre: plan origin at the model's corner; keep elevations unless far from 0
     let all = bounds(
         &found
@@ -875,6 +947,10 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
     let mut space_src: Vec<u64> = Vec::new(); // IFC id of each p.spaces entry
     let (mut defaulted_occupancy, mut stairs, mut degenerate, mut sloped) = (0, 0, 0, 0);
     let (mut outlined, mut outline_dropped) = (0, 0);
+    let mut measured_stairs = 0;
+    let mut curved_walls = 0;
+    let mut unoccupied_spaces = 0;
+    let mut external_doors = 0;
 
     for (kind, id, pts) in &found {
         let e = &f.entities[id];
@@ -908,12 +984,24 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
                     continue;
                 }
                 if *kind == Kind::Wall {
+                    // a curved wall's box is as deep as its arc: keep the box's centre line
+                    // but its real thickness, from its material layers
+                    let mut thickness = 2.0 * hw as f32;
+                    if let Some(layers) = material_of
+                        .get(id)
+                        .and_then(|m| layer_thickness(&f, *m))
+                        .map(|t| (t * len_scale) as f32)
+                        .filter(|t| *t > 0.0 && thickness > 2.0 * t + 0.3)
+                    {
+                        thickness = layers;
+                        curved_walls += 1;
+                    }
                     (
                         ElementKind::Wall {
                             start,
                             end,
                             height,
-                            thickness: 2.0 * hw as f32,
+                            thickness,
                         },
                         Discipline::Architectural,
                         ENVELOPE,
@@ -990,19 +1078,45 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
                     }
                     Kind::Stair => {
                         stairs += 1;
-                        let risers = e
-                            .arg(8)
-                            .num()
-                            .filter(|n| *n >= 1.0)
-                            .map(|n| n as u32)
-                            .unwrap_or(((s.y / 0.178).ceil() as u32).max(1));
+                        // properties (Pset_StairFlightCommon, Revit's "Actual ..."), else the
+                        // flight's attributes (NumberOfRiser(s), RiserHeight, TreadLength), else
+                        // the bounding box. Properties first: some exporters (Revit 2011) write
+                        // the attributes in feet. Lengths outside plausible stair ranges are
+                        // ignored.
+                        let num = |i: usize, names: &[&str]| {
+                            names
+                                .iter()
+                                .find_map(|n| prop(*id, n).and_then(|v| v.num()))
+                                .or_else(|| e.arg(i).num())
+                                .filter(|v| *v > 0.0)
+                        };
+                        let risers = num(
+                            8,
+                            &["NumberOfRiser", "NumberOfRisers", "Actual Number of Risers"],
+                        )
+                        .filter(|n| *n >= 1.0)
+                        .map(|n| n as u32)
+                        .unwrap_or(((s.y / 0.178).ceil() as u32).max(1));
+                        let riser_h = num(10, &["RiserHeight", "Actual Riser Height"])
+                            .map(|v| (v * len_scale) as f32)
+                            .filter(|v| (0.05..=0.3).contains(v));
+                        let tread = num(11, &["TreadLength", "Actual Tread Depth"])
+                            .map(|v| (v * len_scale) as f32)
+                            .filter(|v| (0.1..=0.6).contains(v));
+                        // the stair climbs along the longer side of its footprint
+                        let along_z = s.z > s.x;
+                        let (run, width) = if along_z { (s.z, s.x) } else { (s.x, s.z) };
+                        measured_stairs += (riser_h.is_some() && tread.is_some()) as usize;
                         (
                             ElementKind::Stair {
                                 base: b.min,
-                                run_length: s.x,
-                                total_rise: s.y,
-                                width: s.z,
+                                run_length: tread
+                                    .map(|t| t * risers.saturating_sub(1).max(1) as f32)
+                                    .unwrap_or(run),
+                                total_rise: riser_h.map(|r| r * risers as f32).unwrap_or(s.y),
+                                width,
                                 riser_count: risers,
+                                along_z,
                             },
                             Discipline::Architectural,
                             FIT_OUT,
@@ -1033,12 +1147,21 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
                 let occ = prop(*id, "OccupancyType")
                     .and_then(|v| v.str())
                     .and_then(occupancy_from);
-                if occ.is_none() {
+                let sp_name = long.map(str::to_string).unwrap_or(label.clone());
+                // roofs, voids and shafts by name, unless the file gives an occupancy
+                let unoccupied = occ.is_none() && is_unoccupied_name(&sp_name);
+                if unoccupied {
+                    unoccupied_spaces += 1;
+                } else if occ.is_none() {
                     defaulted_occupancy += 1;
                 }
                 let mut sp = Space::new(
-                    long.map(str::to_string).unwrap_or(label.clone()),
-                    occ.unwrap_or(Occupancy::Business),
+                    sp_name,
+                    occ.unwrap_or(if unoccupied {
+                        Occupancy::Unoccupied
+                    } else {
+                        Occupancy::Business
+                    }),
                     s.x * s.z,
                 );
                 sp.bounds = Some([b.min.x, b.min.z, s.x, s.z]);
@@ -1102,26 +1225,38 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
     let mut unhosted = 0;
     let mut placed: HashMap<ElementId, Vec<(f32, f32)>> = HashMap::new();
     let mut dropped_overlap = 0;
-    for (_, id, pts) in found.iter().filter(|(k, _, _)| *k == Kind::Door) {
+    let mut passages = 0;
+    let items = found
+        .iter()
+        .filter(|(k, _, _)| *k == Kind::Door)
+        .map(|(_, id, pts)| (id, pts, false))
+        .chain(unfilled.iter().map(|(id, pts)| (id, pts, true)));
+    for (id, pts, opening) in items {
         let e = &f.entities[id];
         let pts: Vec<Vec3> = pts.iter().map(|q| *q + shift).collect();
         let b = bounds(&pts);
         let centre = (b.min + b.max) / 2.0;
-        let host = fill_opening
-            .get(id)
-            .and_then(|o| void_host.get(o))
-            .and_then(|w| walls.get(w))
-            .or_else(|| {
-                walls
-                    .values()
-                    .filter(|(_, s, t, _, th)| dist_to_segment(centre, *s, *t) <= th / 2.0 + 0.3)
-                    .min_by(|a, c| {
-                        dist_to_segment(centre, a.1, a.2)
-                            .total_cmp(&dist_to_segment(centre, c.1, c.2))
-                    })
-            });
+        let host = if opening {
+            void_host.get(id).and_then(|w| walls.get(w))
+        } else {
+            fill_opening
+                .get(id)
+                .and_then(|o| void_host.get(o))
+                .and_then(|w| walls.get(w))
+        }
+        .or_else(|| {
+            if opening {
+                return None;
+            }
+            walls
+                .values()
+                .filter(|(_, s, t, _, th)| dist_to_segment(centre, *s, *t) <= th / 2.0 + 0.3)
+                .min_by(|a, c| {
+                    dist_to_segment(centre, a.1, a.2).total_cmp(&dist_to_segment(centre, c.1, c.2))
+                })
+        });
         let Some(&(wall_id, s, t, wall_h, _)) = host else {
-            unhosted += 1;
+            unhosted += (!opening) as usize;
             continue;
         };
         let len = s.distance(t);
@@ -1146,6 +1281,11 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
             .unwrap_or(b.max.y - b.min.y)
             .min(wall_h);
         let offset = ((t0 + t1) / 2.0 - width / 2.0).clamp(0.0, (len - width).max(0.0));
+        // an opening is a passage only when people can walk through it: from the floor, at
+        // least door height and width (ducts and hatches are not)
+        if opening && !(b.min.y - s.y <= 0.15 && height >= 1.8 && width >= 0.6) {
+            continue;
+        }
         if width <= 1e-4 || height <= 1e-4 {
             degenerate += 1;
             continue;
@@ -1155,21 +1295,49 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
             .iter()
             .any(|(o, w)| offset < o + w - 1e-4 && *o < offset + width - 1e-4)
         {
-            dropped_overlap += 1;
+            dropped_overlap += (!opening) as usize;
             continue;
         }
         width = width.min(len - offset);
         taken.push((offset, width));
-        let egress = matches!(
-            prop(*id, "FireExit").and_then(|v| v.enumv()),
-            Some("T" | "TRUE")
-        );
-        let label = e
-            .arg(2)
-            .str()
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("{} #{id}", e.ty));
+        // an exit: marked as a fire exit, or an exterior door (IsExternal)
+        let flag = |n: &str| matches!(prop(*id, n).and_then(|v| v.enumv()), Some("T" | "TRUE"));
+        let fire_exit = !opening && flag("FireExit");
+        let egress = !opening && (fire_exit || flag("IsExternal"));
+        external_doors += (egress && !fire_exit) as usize;
+        // leaves from the operation type (the door's own, IFC4, else its type's): a pair for
+        // DOUBLE_DOOR_*; a DOUBLE_SWING_* door is one leaf swinging both ways
+        let operation = e.arg(11).enumv().or_else(|| {
+            let t = f.entities.get(type_of.get(id)?)?;
+            match t.ty.as_str() {
+                "IFCDOORSTYLE" => t.arg(8).enumv(),
+                "IFCDOORTYPE" => t.arg(10).enumv(),
+                _ => None,
+            }
+        });
+        let named_double = || {
+            let n = e.arg(2).str().unwrap_or("").to_lowercase();
+            n.contains("double") || n.contains("dbl")
+        };
+        let leaves = if opening {
+            0
+        } else if operation
+            .filter(|o| !matches!(*o, "NOTDEFINED" | "USERDEFINED"))
+            .map_or_else(named_double, |o| o.starts_with("DOUBLE_DOOR"))
+        {
+            2
+        } else {
+            1
+        };
+        let label = if opening {
+            "Opening".to_string()
+        } else {
+            e.arg(2)
+                .str()
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("{} #{id}", e.ty))
+        };
         let mut el = Element::new(
             label,
             ElementKind::Door {
@@ -1178,11 +1346,17 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
                 width,
                 height,
                 is_egress: egress,
+                leaves,
             },
             Discipline::Architectural,
             FIT_OUT,
         );
-        el.cost_code = "C1020".into();
+        // an opening has no door to price
+        el.cost_code = if opening {
+            String::new()
+        } else {
+            "C1020".into()
+        };
         el.id = unique_id(e, &mut used_ids);
         el.level = level_for(*id).or_else(|| {
             p.elements
@@ -1190,8 +1364,12 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
                 .find(|w| w.id == wall_id)
                 .and_then(|w| w.level)
         });
-        doors.insert(*id, (el.id, egress));
-        *count.entry("doors").or_default() += 1;
+        if opening {
+            passages += 1;
+        } else {
+            doors.insert(*id, (el.id, egress));
+            *count.entry("doors").or_default() += 1;
+        }
         p.add(el);
     }
     // egress doors on each space's boundary
@@ -1298,9 +1476,15 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
             "{dropped_overlap} door(s) skipped: they overlap another door in the same wall."
         ));
     }
+    if curved_walls > 0 {
+        notes.push(format!("{curved_walls} curved wall(s) imported as straight walls along their arc, at their material-layer thickness."));
+    }
+    if passages > 0 {
+        notes.push(format!("{passages} wall opening(s) with no door in them, from the floor and at least 1.8 m high and 0.6 m wide, imported as passages (doors with 0 leaves, unpriced)."));
+    }
     if count.contains_key("doors") {
         let eg = doors.values().filter(|(_, e)| *e).count();
-        notes.push(format!("{eg} door(s) marked egress from their FireExit property; check egress doors per space in Edit → Spaces."));
+        notes.push(format!("{eg} door(s) marked egress: {} from their FireExit property, {external_doors} exterior door(s) (IsExternal) as exits to outside; check them in Edit.", eg - external_doors));
     }
     let n_spaces = p.spaces.len();
     if n_spaces > 0 {
@@ -1313,6 +1497,9 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
             }
         ));
     }
+    if unoccupied_spaces > 0 {
+        notes.push(format!("{unoccupied_spaces} space(s) named as a roof, void (open to below), shaft or chase set to Unoccupied: no occupant load, not walked through; change in Edit → Spaces."));
+    }
     if defaulted_occupancy > 0 {
         notes.push(format!("{defaulted_occupancy} space(s) had no IBC occupancy (OccupancyType) and were set to Business; review in Edit → Spaces."));
     }
@@ -1322,9 +1509,9 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
         ));
     }
     if stairs > 0 {
-        notes.push(
-            "Stairs and ramps are approximated by their bounding box and run along +X.".into(),
-        );
+        notes.push(format!(
+            "Stairs are straight flights along the longer side of their footprint; {measured_stairs} of {stairs} with risers and treads from the file, the rest estimated from their size. Ramps run along +X."
+        ));
     }
     notes.push("Elements are fitted to simple boxes (walls/beams by their plan footprint, others by bounding box); slab and column rotation is not kept. Phases and cost codes are defaults; add unit costs in Edit → Unit costs.".into());
     for err in p.validate().iter().take(10) {

@@ -269,10 +269,16 @@ pub fn aabb<L: Lookup + ?Sized>(project: &L, e: &Element) -> Result<Aabb, GeomEr
             run_length,
             total_rise,
             width,
+            along_z,
             ..
         } => Aabb {
             min: *base,
-            max: *base + vec3(*run_length, *total_rise, *width),
+            max: *base
+                + if *along_z {
+                    vec3(*width, *total_rise, *run_length)
+                } else {
+                    vec3(*run_length, *total_rise, *width)
+                },
         },
         ElementKind::Ramp {
             base,
@@ -386,6 +392,7 @@ pub fn mesh_for<L: Lookup + ?Sized>(project: &L, e: &Element) -> Result<Mesh, Ge
             total_rise,
             width,
             riser_count,
+            along_z,
         } => {
             // n risers climb n-1 treads; the top riser lands on the floor above
             // (same convention as the stair geometry rule)
@@ -395,11 +402,20 @@ pub fn mesh_for<L: Lookup + ?Sized>(project: &L, e: &Element) -> Result<Mesh, Ge
             let tread = run_length / treads as f32;
             let mut m = Mesh::default();
             for i in 0..treads {
-                let x0 = base.x + tread * i as f32;
-                m.append(box_mesh(&Aabb {
-                    min: vec3(x0, base.y, base.z),
-                    max: vec3(x0 + tread, base.y + riser * (i + 1) as f32, base.z + width),
-                }));
+                let a = tread * i as f32;
+                let top = base.y + riser * (i + 1) as f32;
+                let (min, max) = if *along_z {
+                    (
+                        vec3(base.x, base.y, base.z + a),
+                        vec3(base.x + width, top, base.z + a + tread),
+                    )
+                } else {
+                    (
+                        vec3(base.x + a, base.y, base.z),
+                        vec3(base.x + a + tread, top, base.z + width),
+                    )
+                };
+                m.append(box_mesh(&Aabb { min, max }));
             }
             m
         }
@@ -764,6 +780,7 @@ mod tests {
                 width: 0.3,
                 height: 2.1,
                 is_egress: false,
+                leaves: 1,
             },
             Discipline::Architectural,
             PhaseId(3),

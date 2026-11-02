@@ -172,6 +172,7 @@ name = "bim-cli"
 version = "0.1.0"
 dependencies = [
  "bim-core",
+ "bim-egress",
  "bim-export",
  "bim-geom",
  "bim-ifc",
@@ -243,6 +244,7 @@ dependencies = [
  "bim-egress",
  "bim-export",
  "bim-geom",
+ "bim-ifc",
  "bim-rules",
  "bim-schedule",
  "bim-takeoff",

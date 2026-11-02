@@ -78,6 +78,8 @@ pub struct SpaceOut {
     pub occupancy: String,
     pub area_m2: f32,
     pub exits: usize,
+    /// `exits` counted from the plan (doors leading to an exit) rather than assigned by hand.
+    pub exits_from_plan: bool,
     pub level: Option<u32>,
     /// Occupants per the rule set's area-per-occupant factor for this occupancy, if it has one.
     pub occupant_load: Option<u32>,
@@ -274,7 +276,7 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
         .flat_map(|e| e.positions.iter().skip(1).step_by(3).copied())
         .reduce(f32::max);
     let code_summary = rules
-        .and_then(|rs| code::summarize(project, rs, top_y))
+        .and_then(|rs| code::summarize(project, rs, top_y, Some(&egress)))
         .map(|(sum, found)| {
             advisories.extend(found);
             sum
@@ -282,7 +284,8 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
     // an unpriced cost code silently totals $0; surface it, once per code (an
     // imported model has no rates yet, so per-element advisories would flood)
     let mut unpriced: std::collections::BTreeMap<&str, usize> = Default::default();
-    for e in &project.elements {
+    let opening = |e: &Element| matches!(e.kind, ElementKind::Door { leaves: 0, .. });
+    for e in project.elements.iter().filter(|e| !opening(e)) {
         if !project.unit_costs.contains_key(&e.cost_code) {
             *unpriced.entry(e.cost_code.as_str()).or_default() += 1;
         }
@@ -337,10 +340,6 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
             .total_cmp(&b.elevation_m)
             .then(a.id.cmp(&b.id))
     });
-    let elev = |l: Option<LevelId>| {
-        l.and_then(|id| project.levels.iter().find(|x| x.id == id))
-            .map_or(0.0, |x| x.elevation_m)
-    };
     let egress_paths = project
         .spaces
         .iter()
@@ -351,25 +350,24 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
             level: s.level.map(|l| l.0),
             length_m: e.travel_m.unwrap_or_default(),
             common_path_m: e.common_path_m.unwrap_or_default(),
-            points: e
-                .path
-                .iter()
-                .map(|q| [q[0], elev(s.level) + 0.05, q[1]])
-                .collect(),
+            points: e.path.iter().map(|q| [q[0], q[1] + 0.05, q[2]]).collect(),
         })
         .collect();
     let spaces = project
         .spaces
         .iter()
+        .enumerate()
         .zip(&egress.spaces)
-        .map(|(s, e)| SpaceOut {
+        .map(|((i, s), e)| (s, e, bim_rules::room_exits(project, i, Some(&egress))))
+        .map(|(s, e, exits)| SpaceOut {
             outline: s.polygon(),
             travel_m: e.travel_m,
             common_path_m: e.common_path_m,
             name: s.name.clone(),
             occupancy: format!("{:?}", s.occupancy),
             area_m2: s.area_m2(),
-            exits: bim_rules::egress_exits(&ix, s),
+            exits: exits.0,
+            exits_from_plan: exits.1,
             level: s.level.map(|l| l.0),
             occupant_load: rules
                 .and_then(|rs| rs.occupant_factor(s.occupancy))

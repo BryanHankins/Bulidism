@@ -129,13 +129,14 @@ fn fixture_imports_every_supported_kind() {
         width,
         height,
         is_egress,
+        leaves,
     } = by_name(p, "Front door").kind
     else {
         panic!()
     };
     assert_eq!(host, wall_a);
     assert!(
-        near(offset, 2.0) && near(width, 0.9) && near(height, 2.1) && is_egress,
+        near(offset, 2.0) && near(width, 0.9) && near(height, 2.1) && is_egress && leaves == 1,
         "{offset} {width} {height}"
     );
 
@@ -190,6 +191,7 @@ fn fixture_imports_every_supported_kind() {
         total_rise,
         width,
         riser_count,
+        along_z,
     } = by_name(p, "Stair flight").kind
     else {
         panic!()
@@ -201,7 +203,8 @@ fn fixture_imports_every_supported_kind() {
             && near(width, 1.2),
         "{base}"
     );
-    assert_eq!(riser_count, 9);
+    // run, rise from the flight's own 8 treads of 375 mm and 9 risers of 166.7 mm
+    assert_eq!((riser_count, along_z), (9, false));
 
     let sp = &p.spaces[0];
     assert_eq!(sp.name, "Waiting Room");
