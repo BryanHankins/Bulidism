@@ -177,6 +177,20 @@ pub fn check(
             ));
         }
     }
+    if rules.is_some() {
+        out.extend(item(
+            "space.no_dwelling_unit",
+            "info",
+            "Residential spaces in no dwelling unit: the dwelling-unit exceptions (78 in doors, 7 3/4 in risers and 10 in treads, no 32 in interior doors) are not applied to their doors and stairs (Edit → Spaces → Group into units)".into(),
+            names(
+                &mut p
+                    .spaces
+                    .iter()
+                    .filter(|s| s.occupancy == Occupancy::Residential && s.dwelling_unit.is_none())
+                    .map(|s| &s.name),
+            ),
+        ));
+    }
     out.extend(item(
         "element.no_cost_code",
         "info",

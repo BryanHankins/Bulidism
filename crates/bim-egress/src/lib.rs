@@ -48,6 +48,9 @@ pub struct DoorLink {
     pub cross_m: f32,
     /// An open stair linking two storeys (`id` is its first flight), not a door.
     pub stair: bool,
+    /// The elements this link stands for: the door, or every flight of the stair; none for
+    /// an open connection between rooms.
+    pub members: Vec<ElementId>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -391,6 +394,7 @@ fn open_links(p: &Project, polys: &[Option<Vec<[f32; 2]>>], stair_room: &[bool])
                 exit: stair_room[i] || stair_room[j],
                 cross_m: 0.1,
                 stair: false,
+                members: vec![],
             });
         }
     }
@@ -541,6 +545,7 @@ fn stair_links(p: &Project, polys: &[Option<Vec<[f32; 2]>>], stair_room: &[bool]
             exit: stair_room[a] || stair_room[b],
             cross_m: length,
             stair: true,
+            members: chain.iter().map(|&k| flights[k].id).collect(),
         });
     }
     out
@@ -636,6 +641,7 @@ fn doors(
             exit: (is_egress && outside) || to_stair,
             cross_m: dist(points[0], points[1]),
             stair: false,
+            members: vec![e.id],
         });
     }
     out
@@ -1046,6 +1052,66 @@ impl Analysis {
             })
             .collect()
     }
+}
+
+/// Whether a space is in a dwelling unit (a Residential space with a unit name).
+fn unit_of(p: &Project, i: usize) -> Option<&str> {
+    let s = &p.spaces[i];
+    (s.occupancy == Occupancy::Residential)
+        .then_some(s.dwelling_unit.as_deref())
+        .flatten()
+}
+
+impl Analysis {
+    /// The dwelling unit a door or stair is entirely within: every room it connects belongs to
+    /// that one unit. None for doors to outside or between units, and for elements not on the
+    /// plan.
+    pub fn unit_within<'p>(&self, p: &'p Project, element: ElementId) -> Option<&'p str> {
+        let link = self.doors.iter().find(|d| d.members.contains(&element))?;
+        let [Some(a), Some(b)] = link.sides else {
+            return None;
+        };
+        let (ua, ub) = (unit_of(p, a)?, unit_of(p, b)?);
+        (ua == ub).then_some(ua)
+    }
+}
+
+/// Suggested dwelling units: Residential rooms joined to each other by doors, openings or
+/// stairs, without passing through a room named as a corridor or lobby (common areas), each
+/// group named "Unit 1", "Unit 2", ... in the order of its first space. One entry per space;
+/// None for spaces outside any group.
+pub fn suggest_dwelling_units(p: &Project) -> Vec<Option<String>> {
+    let a = analyze(p);
+    let common = |i: usize| {
+        let n = p.spaces[i].name.to_lowercase();
+        ["corridor", "lobby", "common", "public"]
+            .iter()
+            .any(|w| n.contains(w))
+    };
+    let member = |i: usize| p.spaces[i].occupancy == Occupancy::Residential && !common(i);
+    let mut unit: Vec<Option<usize>> = vec![None; p.spaces.len()];
+    let mut next = 0;
+    for start in (0..p.spaces.len()).filter(|&i| member(i)) {
+        if unit[start].is_some() {
+            continue;
+        }
+        unit[start] = Some(next);
+        let mut stack = vec![start];
+        while let Some(r) = stack.pop() {
+            for d in a.doors.iter().filter(|d| d.sides.contains(&Some(r))) {
+                for &o in d.sides.iter().flatten() {
+                    if unit[o].is_none() && member(o) {
+                        unit[o] = Some(next);
+                        stack.push(o);
+                    }
+                }
+            }
+        }
+        next += 1;
+    }
+    unit.into_iter()
+        .map(|u| u.map(|k| format!("Unit {}", k + 1)))
+        .collect()
 }
 
 /// Clear distance between two door openings: centre to centre less half of each width

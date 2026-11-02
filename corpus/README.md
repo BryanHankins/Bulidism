@@ -8,7 +8,8 @@ rules show up against real files, not only hand-made ones.
     cargo test --release -p bim-report --test corpus -- --nocapture
     UPDATE_CORPUS=1 cargo test --release -p bim-report --test corpus   # rewrite expectations
 
-`manifest.json` lists each model (pinned URL, SHA-256, license). The files are downloaded into
+`manifest.json` lists each model (pinned URL, SHA-256, license), optionally with a `setup`:
+what a user would set after importing (occupancy, dwelling units), applied before the check. The files are downloaded into
 `corpus/cache/` (git-ignored), not committed. `expected/<id>.json` holds the reviewed answers:
 element counts, rooms with no route to an exit, the longest walk, and every error/warning
 finding with a verdict:
@@ -28,7 +29,8 @@ every change in results is looked at.
 
 | model | findings | valid | rule limit | model gap | false positive |
 |---|---|---|---|---|---|
-| Duplex Apartment (Revit 2011) | 10 | 2 | 8 | 0 | 0 |
+| Duplex Apartment (Revit 2011), as imported | 10 | 2 | 8 | 0 | 0 |
+| Duplex, spaces set Residential and grouped into dwelling units | 8 | 8 | 0 | 0 | 0 |
 | Medical-Dental Clinic (Revit) | 16 | 6 | 6 | 4 | 0 |
 
 Before this corpus existed the Clinic produced 187 findings, most of them false: 124 rooms

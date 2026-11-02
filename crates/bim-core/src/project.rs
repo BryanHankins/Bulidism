@@ -533,6 +533,7 @@ impl Project {
             bounds: Some([0.0, 0.0, 12.0, 8.0]),
             level: Some(LevelId(0)),
             outline: None,
+            dwelling_unit: None,
         });
         // one storey at the top of the ground slab; the entry ramp is site work
         p.levels = vec![Level {

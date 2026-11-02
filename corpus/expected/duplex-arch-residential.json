@@ -1,0 +1,85 @@
+{
+  "counts": {
+    "doors": 14,
+    "dwelling_units": 2,
+    "egress_doors": 4,
+    "levels": 4,
+    "passages": 0,
+    "slabs": 21,
+    "spaces": 21,
+    "spaces_with_outline": 17,
+    "stairs": 2,
+    "walls": 57
+  },
+  "cut_off": [],
+  "longest_walk": [
+    "Bedroom 1",
+    20.1
+  ],
+  "findings": [
+    {
+      "rule": "door.max_leaf_width",
+      "subject": "M_Single-Flush:1250mm x 2010mm:1250mm x 2010mm:146596",
+      "check": "door leaf width",
+      "measured": 1.25,
+      "verdict": "valid",
+      "note": "a 1250 mm leaf exceeds the 48 in (1219 mm) maximum"
+    },
+    {
+      "rule": "door.max_leaf_width",
+      "subject": "M_Single-Flush:1250mm x 2010mm:1250mm x 2010mm:146678",
+      "check": "door leaf width",
+      "measured": 1.25,
+      "verdict": "valid",
+      "note": "a 1250 mm leaf exceeds the 48 in (1219 mm) maximum"
+    },
+    {
+      "rule": "door.min_height",
+      "subject": "M_Single-Flush:1250mm x 2010mm:1250mm x 2010mm:146596",
+      "check": "door height",
+      "measured": 2.01,
+      "verdict": "valid",
+      "note": "the unit entrance doors open to outside (not within the unit), so 80 in applies under the IBC; the IRC, which governs a duplex, asks 78 in"
+    },
+    {
+      "rule": "door.min_height",
+      "subject": "M_Single-Flush:1250mm x 2010mm:1250mm x 2010mm:146678",
+      "check": "door height",
+      "measured": 2.01,
+      "verdict": "valid",
+      "note": "the unit entrance doors open to outside (not within the unit), so 80 in applies under the IBC; the IRC, which governs a duplex, asks 78 in"
+    },
+    {
+      "rule": "egress.door.min_clear_width",
+      "subject": "M_Single-Glass 1:0813 x 2420mm:0813 x 2420mm:171853",
+      "check": "egress door clear width",
+      "measured": 0.749,
+      "verdict": "valid",
+      "note": "exterior doors, not interior doors within the unit, so the 32 in clear width applies under the IBC"
+    },
+    {
+      "rule": "egress.door.min_clear_width",
+      "subject": "M_Single-Glass 1:0813 x 2420mm:0813 x 2420mm:171975",
+      "check": "egress door clear width",
+      "measured": 0.749,
+      "verdict": "valid",
+      "note": "exterior doors, not interior doors within the unit, so the 32 in clear width applies under the IBC"
+    },
+    {
+      "rule": "stair.geometry",
+      "subject": "Stair:Residential - 200mm Max Riser 250mm Tread:151086:1",
+      "check": "tread depth",
+      "measured": 0.25,
+      "verdict": "valid",
+      "note": "within the unit the 7 3/4 in riser now passes; the 250 mm tread is still under the 10 in (254 mm) dwelling-unit minimum"
+    },
+    {
+      "rule": "stair.geometry",
+      "subject": "Stair:Residential - 200mm Max Riser 250mm Tread:198878:1",
+      "check": "tread depth",
+      "measured": 0.25,
+      "verdict": "valid",
+      "note": "within the unit the 7 3/4 in riser now passes; the 250 mm tread is still under the 10 in (254 mm) dwelling-unit minimum"
+    }
+  ]
+}

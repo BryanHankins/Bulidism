@@ -247,12 +247,14 @@ function renderSpaces() {
       <div style="display:flex;gap:6px"><input data-sp="${i}" data-f="name" value="${esc(s.name)}" style="flex:1"><button data-del="${i}" class="btn">✕</button></div>
       <label class="chk">Occupancy<select data-sp="${i}" data-f="occupancy">${opts}</select></label>
       <label class="chk">Level<select data-sp="${i}" data-f="level">${levelOptions(s.level)}</select></label>
+      ${s.occupancy === 'Residential' ? `<label class="chk" title="Spaces with the same unit name form one dwelling unit; doors and stairs within a unit get the dwelling-unit exceptions">Dwelling unit<input data-sp="${i}" data-f="dwelling_unit" value="${esc(s.dwelling_unit || '')}" placeholder="none" style="width:90px"></label>` : ''}
       ${s.outline ? `<div style="font-size:12px;color:var(--muted)">Room outline: ${s.outline.length} corners, ${fmtArea(Math.abs(s.outline.reduce((a, p, k, o) => a + p[0] * o[(k + 1) % o.length][1] - o[(k + 1) % o.length][0] * p[1], 0)) / 2, units)} (editing the rectangle below replaces it)</div>` : ''}
       <label class="chk" style="font-size:12px"><input type="checkbox" data-sp="${i}" data-f="useBounds" ${b ? 'checked' : ''}> area from plan rectangle</label>
       ${b ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">${['x','z','size x','size z'].map((l, j) => `<label style="font-size:11px;color:var(--muted)">${l}${lenInput(`data-sp="${i}" data-b="${j}" style="width:100%"`, b[j])}</label>`).join('')}</div>`
           : `<label class="chk" style="font-size:12px">Area ${units === 'imperial' ? 'sf' : 'm²'}<input type="number" step="1" data-sp="${i}" data-f="floor_area_m2" value="${areaToInput(s.floor_area_m2, units)}" style="width:80px"></label>`}
       <div style="margin-top:6px;font-size:11px;color:var(--muted)">Egress doors</div>${exits}</div>`;
-  }).join('') + '<button class="btn" id="addSpace">+ space</button>';
+  }).join('') + '<button class="btn" id="addSpace">+ space</button>' +
+    (project.spaces.some(s => s.occupancy === 'Residential') ? ' <button class="btn" id="groupUnits" title="Group Residential rooms joined by doors, openings or stairs (not through corridors or lobbies) into dwelling units">Group into units</button>' : '');
   $('spaceEdit').querySelectorAll('[data-f],[data-b]').forEach(inp => inp.onchange = () => {
     const v = inp.dataset.b !== undefined ? parseLen(inp.value, units) : inp.dataset.f === 'floor_area_m2' ? parseArea(inp.value, units) : 0;
     if (Number.isNaN(v)) { badLen(inp.value); renderSpaces(); return; }
@@ -263,6 +265,7 @@ function renderSpaces() {
     else if (inp.dataset.f === 'useBounds') { sp.bounds = inp.checked ? [0, 0, Math.sqrt(sp.floor_area_m2) || 4, Math.sqrt(sp.floor_area_m2) || 4] : null; if (sp.bounds) sp.floor_area_m2 = sp.bounds[2] * sp.bounds[3]; }
     else if (inp.dataset.f === 'floor_area_m2') sp.floor_area_m2 = v;
     else if (inp.dataset.f === 'level') sp.level = inp.value === '' ? null : +inp.value;
+    else if (inp.dataset.f === 'dwelling_unit') { if (inp.value.trim()) sp.dwelling_unit = inp.value.trim(); else delete sp.dwelling_unit; }
     else sp[inp.dataset.f] = inp.value;
     rerun();
   });
@@ -273,6 +276,16 @@ function renderSpaces() {
   });
   $('spaceEdit').querySelectorAll('[data-del]').forEach(b => b.onclick = () => { snapshot(); project.spaces.splice(+b.dataset.del, 1); rerun(); });
   $('addSpace').onclick = () => { snapshot(); project.spaces.push({ name: `Space ${project.spaces.length+1}`, occupancy: spaceOcc, floor_area_m2: 50, egress_doors: [], bounds: null, level: currentLevel()?.id ?? null }); rerun(); };
+  if ($('groupUnits')) $('groupUnits').onclick = () => {
+    try {
+      const units = JSON.parse(bim.suggest_dwelling_units(JSON.stringify(project)));
+      snapshot();
+      project.spaces.forEach((sp, i) => { if (units[i]) sp.dwelling_unit = units[i]; });
+      const n = new Set(units.filter(Boolean)).size;
+      notice = ` · grouped ${units.filter(Boolean).length} space(s) into ${n} dwelling unit(s)`;
+      rerun();
+    } catch (e) { $('runErr').textContent = String(e); }
+  };
   $('spaceOcc').onchange = ev => { spaceOcc = ev.target.value; store.set('buildsim.spaceOcc', spaceOcc); };
 }
 $('showSpaces').onchange = e => window.__viewer.setSpacesVisible(e.target.checked);

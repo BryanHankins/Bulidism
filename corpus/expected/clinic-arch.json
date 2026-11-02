@@ -1,6 +1,7 @@
 {
   "counts": {
     "doors": 249,
+    "dwelling_units": 0,
     "egress_doors": 15,
     "levels": 4,
     "passages": 16,
