@@ -16,6 +16,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+bim-core.workspace = true
 bim-ifc.workspace = true
 bim-export.workspace = true
 glam.workspace = true

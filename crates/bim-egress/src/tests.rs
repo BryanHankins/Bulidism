@@ -370,6 +370,7 @@ fn separation_and_diagonal() {
         exit: true,
         cross_m: 0.0,
         stair: false,
+        members: vec![],
     };
     let b = DoorLink {
         center: [10.0, 0.0],
@@ -486,4 +487,47 @@ fn open_plan_rooms_connect_where_no_wall_divides_them() {
     // with a full wall between them, no connection
     walls(&mut p, &[[4., 2.], [4., 5.]]);
     assert!(analyze(&p).spaces[0].travel_m.is_none());
+}
+
+#[test]
+fn dwelling_units_are_suggested_and_doors_within_them_found() {
+    let mut p = corridor_plan();
+    for s in &mut p.spaces {
+        s.occupancy = Occupancy::Residential;
+    }
+    // a bedroom closet inside apartment A
+    walls(&mut p, &[[0., 6.5], [1.5, 6.5], [1.5, 8.]]);
+    let closet_wall = p.elements.iter().rev().nth(1).unwrap().id;
+    let closet_door = door(&mut p, "Closet door", closet_wall, 0.25, false);
+    room(
+        &mut p,
+        "Closet",
+        &[[0., 6.5], [1.5, 6.5], [1.5, 8.], [0., 8.]],
+    );
+    p.spaces[3].occupancy = Occupancy::Residential;
+    // the corridor is common: A (+ its closet) and B are separate units
+    let u = suggest_dwelling_units(&p);
+    assert_eq!(
+        u,
+        vec![
+            None,
+            Some("Unit 1".into()),
+            Some("Unit 2".into()),
+            Some("Unit 1".into())
+        ]
+    );
+    for (s, u) in p.spaces.iter_mut().zip(u) {
+        s.dwelling_unit = u;
+    }
+    let a = analyze(&p);
+    assert_eq!(a.unit_within(&p, closet_door), Some("Unit 1"));
+    let a_door = p.elements.iter().find(|e| e.name == "A door").unwrap().id;
+    assert_eq!(
+        a.unit_within(&p, a_door),
+        None,
+        "the unit's entrance from the corridor"
+    );
+    // not Residential: no unit
+    p.spaces[1].occupancy = Occupancy::Business;
+    assert_eq!(analyze(&p).unit_within(&p, closet_door), None);
 }

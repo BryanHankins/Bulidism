@@ -312,6 +312,7 @@ name = "bim-wasm"
 version = "0.1.0"
 dependencies = [
  "bim-core",
+ "bim-egress",
  "bim-export",
  "bim-geom",
  "bim-ifc",

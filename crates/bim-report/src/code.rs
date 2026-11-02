@@ -303,8 +303,14 @@ pub fn summarize(
     let mut notes = vec![
         format!("Single-exit stories (Table 1006.3.4) are not evaluated; stories with {} or fewer occupants raise no exit-count finding.", c.single_exit_screen_load),
         "Allowable area and height (IBC Chapter 5) are not evaluated; construction type is recorded only.".into(),
-        "Stair capacity counts stairs arriving at each story (top within 0.3 m of the level); travel distance and common path are not evaluated.".into(),
+        "Stair capacity counts stairs arriving at each story (top within 0.3 m of the level). Travel distance, common path and exit separation are checked per room from the plan (see Findings).".into(),
     ];
+    if p.spaces
+        .iter()
+        .any(|s| s.occupancy == Occupancy::Residential)
+    {
+        notes.push("Detached one- and two-family dwellings and townhouses are regulated by the residential code (IRC; in Indiana, the Indiana Residential Code), which this rule set does not check. Dwelling-unit exceptions apply to spaces assigned to a dwelling unit.".into());
+    }
     let missing: usize = out_levels.iter().map(|l| l.spaces_without_factor).sum();
     if missing > 0 {
         notes.push(format!("{missing} space(s) have an occupancy with no occupant-load factor in this rule set; their load is not counted."));

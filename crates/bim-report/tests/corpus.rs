@@ -29,6 +29,16 @@ struct Model {
     id: String,
     file: String,
     rules: String,
+    /// What a user would set after importing, applied before the check.
+    #[serde(default)]
+    setup: Option<Setup>,
+}
+#[derive(Deserialize)]
+struct Setup {
+    /// Occupancy for every space that is not Unoccupied.
+    occupancy: Option<bim_core::Occupancy>,
+    /// "suggest": dwelling units from `bim_egress::suggest_dwelling_units`.
+    dwelling_units: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Default)]
@@ -70,7 +80,22 @@ fn root() -> PathBuf {
 }
 
 fn facts(model: &Model, ifc: &str) -> Expected {
-    let r = bim_ifc::import(ifc, &model.id).expect("imports");
+    let mut r = bim_ifc::import(ifc, &model.id).expect("imports");
+    if let Some(setup) = &model.setup {
+        if let Some(o) = setup.occupancy {
+            for s in &mut r.project.spaces {
+                if s.occupancy != bim_core::Occupancy::Unoccupied {
+                    s.occupancy = o;
+                }
+            }
+        }
+        if setup.dwelling_units.as_deref() == Some("suggest") {
+            let units = bim_egress::suggest_dwelling_units(&r.project);
+            for (s, u) in r.project.spaces.iter_mut().zip(units) {
+                s.dwelling_unit = u;
+            }
+        }
+    }
     let p = &r.project;
     let rules = bim_rules::RuleSet::from_json(
         &std::fs::read_to_string(root().join(format!("rules/{}.json", model.rules))).unwrap(),
@@ -98,6 +123,14 @@ fn facts(model: &Model, ifc: &str) -> Expected {
         "spaces_with_outline".into(),
         p.spaces.iter().filter(|s| s.outline.is_some()).count(),
     );
+    let mut units: Vec<&str> = p
+        .spaces
+        .iter()
+        .filter_map(|s| s.dwelling_unit.as_deref())
+        .collect();
+    units.sort();
+    units.dedup();
+    counts.insert("dwelling_units".into(), units.len());
     counts.insert(
         "egress_doors".into(),
         kind(|k| {

@@ -89,6 +89,15 @@ pub fn new_project(name: &str, rule_set: &str) -> Result<String, String> {
     p.to_json().map_err(|e| e.to_string())
 }
 
+/// Suggested dwelling units for a project: a JSON array with one unit name (or null) per space,
+/// grouping Residential rooms joined by doors, openings or stairs (see
+/// `bim_egress::suggest_dwelling_units`).
+#[wasm_bindgen]
+pub fn suggest_dwelling_units(project_json: &str) -> Result<String, String> {
+    let p = valid_project(project_json)?;
+    serde_json::to_string(&bim_egress::suggest_dwelling_units(&p)).map_err(|e| e.to_string())
+}
+
 /// IFC (STEP text, IFC2x3/IFC4) -> `{"project": {...}, "notes": ["..."]}`. `file_name` names the
 /// project when the file has no IfcProject name.
 #[wasm_bindgen]

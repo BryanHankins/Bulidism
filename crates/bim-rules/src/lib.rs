@@ -21,9 +21,16 @@ pub enum Check {
     EgressDoorMinWidth {
         min_clear_width_m: f32,
         leaf_to_clear_deduction_m: f32,
+        /// Interior doors within a dwelling unit are not checked (the unit is assumed not
+        /// required to be accessible).
+        #[serde(default)]
+        exempt_within_dwelling_unit: bool,
     },
+    /// Door opening height; `min_height_m_dwelling` for doors within a dwelling unit.
     DoorMinHeight {
         min_height_m: f32,
+        #[serde(default)]
+        min_height_m_dwelling: Option<f32>,
     },
     /// Riser, tread and width of each flight. Width: `min_width_m`, or `min_width_m_low_load`
     /// where the story the stair arrives at has an occupant load of at most
@@ -37,15 +44,14 @@ pub enum Check {
         min_width_m_low_load: Option<f32>,
         #[serde(default)]
         low_load_max_occupants: Option<u32>,
+        /// Riser and tread limits for stairs within a dwelling unit.
+        #[serde(default)]
+        dwelling: Option<StairDwelling>,
     },
     /// Single door leaf wider than `max_leaf_width_m`.
-    DoorMaxLeafWidth {
-        max_leaf_width_m: f32,
-    },
+    DoorMaxLeafWidth { max_leaf_width_m: f32 },
     /// Vertical rise of one stair flight above `max_rise_m` (a landing is required).
-    StairMaxRisePerFlight {
-        max_rise_m: f32,
-    },
+    StairMaxRisePerFlight { max_rise_m: f32 },
     /// Ramp slope steeper than 1:`min_run_per_rise`, or a single run rising more than `max_rise_m`.
     RampSlope {
         min_run_per_rise: f32,
@@ -87,6 +93,13 @@ pub enum Check {
         area_per_occupant_m2: f32,
         max_occupants_single_exit: u32,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StairDwelling {
+    pub max_riser_m: f32,
+    pub min_tread_m: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -363,6 +376,9 @@ impl RuleSet {
                 r.check,
                 Check::TravelDistance { .. }
                     | Check::CommonPath { .. }
+                    | Check::DoorMinHeight { .. }
+                    | Check::EgressDoorMinWidth { .. }
+                    | Check::StairGeometry { .. }
                     | Check::ExitSeparation { .. }
                     | Check::OccupantLoadExits { .. }
             )
@@ -386,6 +402,8 @@ impl RuleSet {
         // and, where rooms are modelled, doors with no room on either side (site gates):
         // readiness lists those as unchecked
         let rooms_known = egress.is_some_and(|a| a.spaces.iter().any(|s| s.analyzed));
+        // the dwelling unit a door or stair is entirely within (dwelling-unit exceptions)
+        let in_unit = |id: ElementId| egress.and_then(|a| a.unit_within(p, id));
         let on_route = |id: ElementId| {
             !egress.is_some_and(|a| {
                 a.internal_doors.contains(&id)
@@ -427,8 +445,13 @@ impl RuleSet {
                 Check::EgressDoorMinWidth {
                     min_clear_width_m: lim,
                     leaf_to_clear_deduction_m: ded,
+                    exempt_within_dwelling_unit,
                 } => {
-                    for e in &p.elements {
+                    for e in p
+                        .elements
+                        .iter()
+                        .filter(|e| !(*exempt_within_dwelling_unit && in_unit(e.id).is_some()))
+                    {
                         if let ElementKind::Door {
                             width,
                             is_egress: true,
@@ -463,19 +486,27 @@ impl RuleSet {
                         }
                     }
                 }
-                Check::DoorMinHeight { min_height_m: lim } => {
+                Check::DoorMinHeight {
+                    min_height_m,
+                    min_height_m_dwelling,
+                } => {
                     for e in p.elements.iter().filter(|e| on_route(e.id)) {
                         if let ElementKind::Door { height, .. } = e.kind {
-                            if height < *lim {
+                            let unit = in_unit(e.id);
+                            let (lim, why) = match (unit, min_height_m_dwelling) {
+                                (Some(u), Some(d)) => (*d, format!(" (within dwelling unit {u})")),
+                                _ => (*min_height_m, String::new()),
+                            };
+                            if height < lim {
                                 fail(
                                     &e.name,
                                     Some(e.id),
                                     "door height",
                                     height,
                                     Min,
-                                    *lim,
+                                    lim,
                                     Length,
-                                    format!("door height {height:.3} m < {lim:.3} m"),
+                                    format!("door height {height:.3} m < {lim:.3} m{why}"),
                                 );
                             }
                         }
@@ -519,6 +550,7 @@ impl RuleSet {
                     min_width_m,
                     min_width_m_low_load,
                     low_load_max_occupants,
+                    dwelling,
                 } => {
                     for e in &p.elements {
                         let ElementKind::Stair {
@@ -546,8 +578,18 @@ impl RuleSet {
                         }
                         let riser = total_rise / riser_count as f32;
                         let tread = run_length / riser_count.saturating_sub(1).max(1) as f32;
+                        // within a dwelling unit: the unit's riser and tread limits
+                        let unit = in_unit(e.id);
+                        let (max_riser_m, min_tread_m, within) = match (unit, dwelling) {
+                            (Some(u), Some(d)) => (
+                                &d.max_riser_m,
+                                &d.min_tread_m,
+                                format!(" (within dwelling unit {u})"),
+                            ),
+                            _ => (max_riser_m, min_tread_m, String::new()),
+                        };
                         let range = format!(
-                            "riser {riser:.3} m outside [{min_riser_m:.3}, {max_riser_m:.3}]"
+                            "riser {riser:.3} m outside [{min_riser_m:.3}, {max_riser_m:.3}]{within}"
                         );
                         if riser > *max_riser_m {
                             fail(
@@ -581,7 +623,7 @@ impl RuleSet {
                                 Min,
                                 *min_tread_m,
                                 Length,
-                                format!("tread {tread:.3} m < {min_tread_m:.3} m"),
+                                format!("tread {tread:.3} m < {min_tread_m:.3} m{within}"),
                             );
                         }
                         // the story the stair serves: the first level at or above its head
@@ -1300,5 +1342,76 @@ mod tests {
         });
         q.spaces[0].level = Some(LevelId(9));
         assert_eq!(stair(&q), 0);
+    }
+
+    #[test]
+    fn dwelling_unit_exceptions() {
+        let rs = RuleSet::from_json(RS).unwrap();
+        let mut p = Project::sample();
+        // the office becomes an apartment with a bedroom (x 0..4, z 5..8) behind a 2.0 m door
+        let w = p.add(Element::new(
+            "Bedroom wall",
+            ElementKind::Wall {
+                start: glam::vec3(0.0, 0.2, 5.0),
+                end: glam::vec3(4.0, 0.2, 5.0),
+                height: 2.8,
+                thickness: 0.1,
+            },
+            Discipline::Architectural,
+            PhaseId(2),
+        ));
+        p.add(Element::new(
+            "Bedroom door",
+            ElementKind::Door {
+                host: w,
+                offset: 1.0,
+                width: 0.8,
+                height: 2.0,
+                is_egress: true,
+                leaves: 1,
+            },
+            Discipline::Architectural,
+            PhaseId(3),
+        ));
+        let mut bed = Space::new("Bedroom", Occupancy::Residential, 0.0);
+        bed.outline = Some(vec![[0.0, 5.0], [4.0, 5.0], [4.0, 8.0], [0.0, 8.0]]);
+        bed.level = Some(LevelId(0));
+        p.spaces.push(bed);
+        p.spaces[0].occupancy = Occupancy::Residential;
+        let found = |p: &Project| {
+            rs.evaluate(p)
+                .into_iter()
+                .filter(|a| a.subject == "Bedroom door")
+                .map(|a| a.rule_id)
+                .collect::<Vec<_>>()
+        };
+        // no unit: 80 in height and 32 in clear width apply
+        assert_eq!(
+            found(&p),
+            vec!["egress.door.min_clear_width", "door.min_height"]
+        );
+        // one unit: 78 in, and the interior door needs no 32 in clear width
+        for s in &mut p.spaces {
+            s.dwelling_unit = Some("Apt 1".into());
+        }
+        assert_eq!(found(&p), Vec::<String>::new());
+        // a 1.95 m door is still too low
+        for e in &mut p.elements {
+            if let ElementKind::Door { height, .. } = &mut e.kind {
+                if e.name == "Bedroom door" {
+                    *height = 1.95;
+                }
+            }
+        }
+        let msg: Vec<_> = rs
+            .evaluate(&p)
+            .into_iter()
+            .filter(|a| a.subject == "Bedroom door")
+            .map(|a| a.message)
+            .collect();
+        assert_eq!(
+            msg,
+            vec!["door height 1.950 m < 1.981 m (within dwelling unit Apt 1)"]
+        );
     }
 }

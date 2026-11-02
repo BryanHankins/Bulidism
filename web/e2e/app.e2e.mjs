@@ -170,3 +170,21 @@ test('egress: walking distances per room, longest-walk overlay, travel and commo
   assert.deepEqual(errors, []);
   await ctx.close();
 });
+
+test('dwelling units: residential rooms grouped into units, IRC note on the sheet', async () => {
+  const { page, ctx, errors } = await openApp();
+  await applyJson(page, p => { p.spaces[0].occupancy = 'Residential'; });
+  assert.match(await text(page, '#readiness'), /Model readiness/);
+  await page.click('[data-tab="edit"]');
+  await page.click('#groupUnits');
+  const p = await page.evaluate(() => JSON.parse(document.getElementById('jsonBox').value));
+  assert.equal(p.spaces[0].dwelling_unit, 'Unit 1');
+  assert.match(await text(page, '#status'), /grouped 1 space\(s\) into 1 dwelling unit\(s\)/);
+  assert.equal(await page.inputValue('[data-f="dwelling_unit"]'), 'Unit 1');
+  const [w] = await Promise.all([page.waitForEvent('popup'), page.click('#printReport')]);
+  await w.waitForLoadState();
+  assert.match(await w.evaluate(() => document.body.innerText), /regulated by the residential code \(IRC/);
+  await w.close();
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});

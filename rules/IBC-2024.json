@@ -12,7 +12,8 @@
       "check": "egress_door_min_width",
       "min_clear_width_m": 0.813,
       "leaf_to_clear_deduction_m": 0.064,
-      "verified": "2026-09-27 ICC codes.iccsafe.org IBC2024 \u00a71010.1.1 (32 in / 813 mm); leaf-to-clear deduction 64 mm (2.5 in: stop + leaf thickness at 90\u00b0) is a typical-hardware estimate, not code text \u2014 unverified"
+      "verified": "2026-09-27 ICC codes.iccsafe.org IBC2024 \u00a71010.1.1 (32 in / 813 mm); leaf-to-clear deduction 64 mm (2.5 in: stop + leaf thickness at 90\u00b0) is a typical-hardware estimate, not code text \u2014 unverified; interior doors within a dwelling unit exempt (1010.1.1 exception, other than R-1, units not required to be Accessible/Type A/Type B) \u2014 secondary source, unverified",
+      "exempt_within_dwelling_unit": true
     },
     {
       "id": "door.min_height",
@@ -20,7 +21,8 @@
       "severity": "warning",
       "check": "door_min_height",
       "min_height_m": 2.032,
-      "verified": "2026-09-27 ICC codes.iccsafe.org IBC2024 \u00a71010.1.1 (80 in / 2032 mm)"
+      "verified": "2026-09-27 ICC codes.iccsafe.org IBC2024 \u00a71010.1.1 (80 in / 2032 mm); 78 in (1981 mm) within a dwelling unit or sleeping unit (1010.1.1 exception) \u2014 secondary source, unverified",
+      "min_height_m_dwelling": 1.981
     },
     {
       "id": "stair.geometry",
@@ -31,9 +33,13 @@
       "min_riser_m": 0.102,
       "min_tread_m": 0.279,
       "min_width_m": 1.118,
-      "verified": "2026-09-27 riser/tread per ICC IBC2024 \u00a71011.5.2 (7 in max, 4 in min, 11 in tread); width 44 in per \u00a71011.2 from secondary source; 36 in where the occupant load served is under 50 (\u00a71011.2 exception 1, secondary source), taking the load of the story at the stair head",
+      "verified": "2026-09-27 riser/tread per ICC IBC2024 \u00a71011.5.2 (7 in max, 4 in min, 11 in tread); width 44 in per \u00a71011.2 from secondary source; 36 in where the occupant load served is under 50 (\u00a71011.2 exception 1, secondary source), taking the load of the story at the stair head; within dwelling units of R-2 and in R-3: 7 3/4 in (197 mm) risers, 10 in (254 mm) treads (1011.5.2 exception 3) \u2014 secondary source, unverified",
       "min_width_m_low_load": 0.914,
-      "low_load_max_occupants": 49
+      "low_load_max_occupants": 49,
+      "dwelling": {
+        "max_riser_m": 0.197,
+        "min_tread_m": 0.254
+      }
     },
     {
       "id": "ramp.slope",

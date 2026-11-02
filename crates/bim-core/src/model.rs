@@ -238,6 +238,11 @@ pub struct Space {
     /// is only its bounding box. Rectangles drawn in the editor use `bounds` alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outline: Option<Vec<[f32; 2]>>,
+    /// The dwelling unit (apartment) this space belongs to, by name: spaces with the same
+    /// name form one unit. Doors and stairs entirely within a unit get the code's dwelling-unit
+    /// exceptions (Residential only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dwelling_unit: Option<String>,
 }
 
 impl Space {
@@ -250,6 +255,7 @@ impl Space {
             bounds: None,
             level: None,
             outline: None,
+            dwelling_unit: None,
         }
     }
     /// Area of the outline, else of `bounds`, else the stated area.
