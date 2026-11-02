@@ -18,6 +18,8 @@ pub struct LevelEgress {
     pub spaces_without_factor: usize,
     pub exits_required: u32,
     pub exits_provided: u32,
+    /// Exits found on the plan (exit doors of the storey's rooms) rather than assigned by hand.
+    pub exits_from_plan: bool,
     pub door_width_required_m: f32,
     pub door_width_provided_m: f32,
     /// Stair capacity applies to stories above the lowest; None for the lowest.
@@ -98,6 +100,7 @@ pub fn summarize(
     p: &Project,
     rs: &RuleSet,
     top_y: Option<f32>,
+    egress: Option<&bim_egress::Analysis>,
 ) -> Option<(CodeSummary, Vec<Advisory>)> {
     let c = rs.code_summary.as_ref()?;
     let b = &p.building;
@@ -142,32 +145,72 @@ pub fn summarize(
 
     let mut out_levels = Vec::new();
     let mut findings = Vec::new();
-    let lowest = levels.first().map(|l| l.id);
+    // the lowest story people use: footing and foundation levels with no occupied space
+    // are not stories that stairs must serve
+    let lowest = levels
+        .iter()
+        .find(|l| {
+            p.spaces
+                .iter()
+                .any(|s| s.level == Some(l.id) && s.occupancy != Occupancy::Unoccupied)
+        })
+        .or(levels.first())
+        .map(|l| l.id);
     for (lvl, name, spaces) in &groups {
         let load: u32 = spaces.iter().filter_map(|s| load_of(s)).sum();
-        let missing = spaces.iter().filter(|s| load_of(s).is_none()).count();
-        // distinct doors marked egress that serve this group's spaces
-        let mut doors: Vec<ElementId> = spaces
+        let missing = spaces
             .iter()
-            .flat_map(|s| s.egress_doors.iter().copied())
-            .collect();
-        doors.sort_by_key(|d| d.0);
-        doors.dedup();
-        let door_widths: Vec<f32> = doors
+            .filter(|s| s.occupancy != Occupancy::Unoccupied && load_of(s).is_none())
+            .count();
+        // the exits serving this group: found on the plan when its rooms have shapes, else
+        // the distinct egress doors assigned to its spaces by hand
+        let rooms: Vec<usize> = p
+            .spaces
             .iter()
-            .filter_map(|d| match p.element(*d).map(|e| &e.kind) {
-                Ok(ElementKind::Door {
-                    width,
-                    is_egress: true,
-                    ..
-                }) => Some((width - ded).max(0.0)),
-                _ => None,
-            })
+            .enumerate()
+            .filter(|(_, s)| spaces.iter().any(|g| std::ptr::eq(*g, *s)))
+            .map(|(i, _)| i)
             .collect();
+        let planned = egress.filter(|a| rooms.iter().any(|&i| a.spaces[i].analyzed));
+        let door_widths: Vec<f32> = match planned {
+            Some(a) => a
+                .exits_of(&rooms)
+                .iter()
+                .map(|d| {
+                    // capacity counts every leaf, each less its stop; an opening or an open
+                    // stair all of its width
+                    let leaves = match p.element(d.id).map(|e| &e.kind) {
+                        Ok(ElementKind::Door { leaves, .. }) => *leaves,
+                        _ => 0,
+                    };
+                    (d.width - ded * leaves as f32).max(0.0)
+                })
+                .collect(),
+            None => {
+                let mut doors: Vec<ElementId> = spaces
+                    .iter()
+                    .flat_map(|s| s.egress_doors.iter().copied())
+                    .collect();
+                doors.sort_by_key(|d| d.0);
+                doors.dedup();
+                doors
+                    .iter()
+                    .filter_map(|d| match p.element(*d).map(|e| &e.kind) {
+                        Ok(ElementKind::Door {
+                            width,
+                            is_egress: true,
+                            leaves,
+                            ..
+                        }) => Some((width - ded * *leaves as f32).max(0.0)),
+                        _ => None,
+                    })
+                    .collect()
+            }
+        };
         let exits_required = c.exits_required(load);
         let door_req = load as f32 * other_f;
-        let door_prov: f32 = door_widths.iter().sum();
-        // stairs serving a story arrive at it: their top is within 0.3 m of the level
+        let door_prov: f32 = door_widths.iter().sum::<f32>() + 0.0; // never "-0.000"
+                                                                    // stairs serving a story arrive at it: their top is within 0.3 m of the level
         let (stair_req, stair_prov) = match lvl {
             Some(l) if Some(l.id) != lowest => {
                 let prov = p
@@ -182,7 +225,8 @@ pub fn summarize(
                         } if (base.y + total_rise - l.elevation_m).abs() <= 0.3 => Some(width),
                         _ => None,
                     })
-                    .sum();
+                    .sum::<f32>()
+                    + 0.0;
                 (Some(load as f32 * stair_f), prov)
             }
             _ => (None, 0.0),
@@ -211,6 +255,7 @@ pub fn summarize(
             spaces_without_factor: missing,
             exits_required,
             exits_provided: door_widths.len() as u32,
+            exits_from_plan: planned.is_some(),
             door_width_required_m: door_req,
             door_width_provided_m: door_prov,
             stair_width_required_m: stair_req,
@@ -312,7 +357,7 @@ mod tests {
     #[test]
     fn sample_code_sheet() {
         let rs = RuleSet::from_json(RS).unwrap();
-        let (s, found) = summarize(&Project::sample(), &rs, Some(3.9)).unwrap();
+        let (s, found) = summarize(&Project::sample(), &rs, Some(3.9), None).unwrap();
         assert!(found.is_empty(), "{found:?}");
         assert_eq!((s.stories, s.total_occupant_load), (1, 7)); // 96 m2 Business at 13.9 m2/occupant
         assert!((s.height_m.unwrap() - 3.7).abs() < 1e-5); // beam top 3.9 above Level 1 at 0.2
@@ -363,7 +408,7 @@ mod tests {
         big.level = Some(LevelId(1));
         big.egress_doors = vec![door];
         p.spaces.push(big);
-        let (s, found) = summarize(&p, &rs, None).unwrap();
+        let (s, found) = summarize(&p, &rs, None, None).unwrap();
         let l2 = &s.levels[1];
         assert_eq!(
             (l2.occupant_load, l2.exits_required, l2.exits_provided),
@@ -381,9 +426,9 @@ mod tests {
         );
         // sprinklers alone keep full factors; with voice/alarm too they drop
         p.building.sprinklered = true;
-        assert!(!summarize(&p, &rs, None).unwrap().0.reduced_factors);
+        assert!(!summarize(&p, &rs, None, None).unwrap().0.reduced_factors);
         p.building.voice_alarm = true;
-        let (s, _) = summarize(&p, &rs, None).unwrap();
+        let (s, _) = summarize(&p, &rs, None, None).unwrap();
         assert!(
             s.reduced_factors
                 && (s.levels[1].stair_width_required_m.unwrap() - 72.0 * 0.00508).abs() < 1e-5
@@ -394,6 +439,38 @@ mod tests {
     fn no_parameters_no_sheet() {
         let mut rs = RuleSet::from_json(RS).unwrap();
         rs.code_summary = None;
-        assert!(summarize(&Project::sample(), &rs, None).is_none());
+        assert!(summarize(&Project::sample(), &rs, None, None).is_none());
+    }
+
+    #[test]
+    fn exits_come_from_the_plan_when_rooms_have_shapes() {
+        let rs = RuleSet::from_json(RS).unwrap();
+        let mut p = Project::sample();
+        // assigned by hand: none; on the plan: both exterior egress doors
+        p.spaces[0].egress_doors.clear();
+        let eg = bim_egress::analyze(&p);
+        let (s, _) = summarize(&p, &rs, None, Some(&eg)).unwrap();
+        assert_eq!(
+            (s.levels[0].exits_provided, s.levels[0].exits_from_plan),
+            (2, true)
+        );
+        // 0.75 + 0.9 m leaves, less 64 mm each
+        assert!((s.levels[0].door_width_provided_m - 1.522).abs() < 1e-4);
+        // the rear door no longer egress: one exit on the plan
+        for e in &mut p.elements {
+            if let ElementKind::Door { is_egress, .. } = &mut e.kind {
+                *is_egress = e.name == "Main entry";
+            }
+        }
+        let eg = bim_egress::analyze(&p);
+        assert_eq!(
+            summarize(&p, &rs, None, Some(&eg)).unwrap().0.levels[0].exits_provided,
+            1
+        );
+        // a room with no shape falls back to the doors assigned by hand
+        p.spaces[0].bounds = None;
+        let eg = bim_egress::analyze(&p);
+        let l = &summarize(&p, &rs, None, Some(&eg)).unwrap().0.levels[0];
+        assert_eq!((l.exits_provided, l.exits_from_plan), (0, false));
     }
 }

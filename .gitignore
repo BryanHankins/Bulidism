@@ -4,3 +4,4 @@ web/pkg/
 web/rules/
 web/e2e/node_modules/
 web/e2e/package-lock.json
+corpus/cache/

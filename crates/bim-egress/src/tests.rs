@@ -28,6 +28,7 @@ fn door(p: &mut Project, name: &str, host: ElementId, offset: f32, egress: bool)
             width: 1.0,
             height: 2.1,
             is_egress: egress,
+            leaves: 1,
         },
         Discipline::Architectural,
         PhaseId(0),
@@ -96,7 +97,7 @@ fn l_room_walks_around_its_inside_corner() {
         s.travel_m
     );
     assert!(
-        s.path.iter().any(|q| near(q[0], 2.0) && near(q[1], 2.0)),
+        s.path.iter().any(|q| near(q[0], 2.0) && near(q[2], 2.0)),
         "bends at the corner: {:?}",
         s.path
     );
@@ -215,6 +216,7 @@ fn a_stair_room_is_an_exit() {
             total_rise: 3.0,
             width: 1.2,
             riser_count: 17,
+            along_z: false,
         },
         Discipline::Architectural,
         PhaseId(0),
@@ -301,4 +303,187 @@ fn four_hundred_offices() {
         t0.elapsed()
     );
     assert!(a.spaces.iter().all(|s| s.travel_m.is_some()));
+}
+
+#[test]
+fn exit_access_doors_and_storey_exits() {
+    let mut p = corridor_plan();
+    let ids = |names: &[&str], p: &Project| {
+        let mut v: Vec<ElementId> = names
+            .iter()
+            .map(|n| p.elements.iter().find(|e| e.name == *n).unwrap().id)
+            .collect();
+        v.sort_by_key(|d| d.0);
+        v
+    };
+    let a = analyze(&p);
+    // the corridor's exits are its own; its doors into the offices lead nowhere further
+    assert_eq!(
+        a.spaces[0].exit_access_doors,
+        ids(&["West exit", "East exit"], &p)
+    );
+    assert_eq!(a.spaces[1].exit_access_doors, ids(&["A door"], &p));
+    assert_eq!(a.exits_of(&[0, 1, 2]).len(), 2);
+    // a door between the offices: a second way out of A (through B), and of B (through A)
+    let party = p
+        .elements
+        .iter()
+        .find(|e| matches!(e.kind, ElementKind::Wall { start, end, .. } if start.x == 6.0 && end.x == 6.0))
+        .unwrap()
+        .id;
+    door(&mut p, "A-B door", party, 3.0, false); // wall (6,2)->(6,8): centre (6, 5.5)
+    let a = analyze(&p);
+    assert_eq!(
+        a.spaces[1].exit_access_doors,
+        ids(&["A door", "A-B door"], &p)
+    );
+    // a closet off office A: its only door leads back into A, so not a way out of A
+    walls(&mut p, &[[0., 6.5], [1.5, 6.5], [1.5, 8.]]);
+    let closet_wall = p.elements.iter().rev().nth(1).unwrap().id; // (0,6.5)->(1.5,6.5)
+    door(&mut p, "Closet door", closet_wall, 0.25, false);
+    room(
+        &mut p,
+        "Closet",
+        &[[0., 6.5], [1.5, 6.5], [1.5, 8.], [0., 8.]],
+    );
+    // office A's outline still covers the closet; the smallest room wins at the door probe
+    let a = analyze(&p);
+    let closet = a.doors.iter().find(|d| d.name == "Closet door").unwrap();
+    assert!(closet.sides.contains(&Some(3)) && closet.sides.contains(&Some(1)));
+    assert_eq!(
+        a.spaces[1].exit_access_doors,
+        ids(&["A door", "A-B door"], &p)
+    );
+    assert_eq!(a.spaces[3].exit_access_doors, ids(&["Closet door"], &p));
+}
+
+#[test]
+fn separation_and_diagonal() {
+    let a = DoorLink {
+        id: ElementId::new(),
+        name: "a".into(),
+        center: [0.0, 0.0],
+        width: 1.0,
+        is_egress: true,
+        sides: [None, None],
+        points: [[0.0, 0.0]; 2],
+        exit: true,
+        cross_m: 0.0,
+        stair: false,
+    };
+    let b = DoorLink {
+        center: [10.0, 0.0],
+        width: 2.0,
+        ..a.clone()
+    };
+    assert!((door_separation(&a, &b) - 8.5).abs() < 1e-6);
+    assert!((diagonal(&[[0., 0.], [12., 0.], [12., 5.], [0., 5.]]) - 13.0).abs() < 1e-5);
+}
+
+#[test]
+fn an_open_stair_links_storeys() {
+    let mut p = corridor_plan();
+    p.levels = vec![
+        Level {
+            id: LevelId(0),
+            name: "L1".into(),
+            elevation_m: 0.0,
+        },
+        Level {
+            id: LevelId(1),
+            name: "L2".into(),
+            elevation_m: 3.0,
+        },
+    ];
+    for s in &mut p.spaces {
+        s.level = Some(LevelId(0));
+    }
+    // an open stair in the corridor: x 4..8, z 0.4..1.6, rising 3 m along +X
+    p.add(Element::new(
+        "Open stair",
+        ElementKind::Stair {
+            base: vec3(4.0, 0.0, 0.4),
+            run_length: 4.0,
+            total_rise: 3.0,
+            width: 1.2,
+            riser_count: 17,
+            along_z: false,
+        },
+        Discipline::Architectural,
+        PhaseId(0),
+    ));
+    room(&mut p, "Upper", &[[0., 0.], [12., 0.], [12., 8.], [0., 8.]]);
+    p.spaces[3].level = Some(LevelId(1));
+    let a = analyze(&p);
+    let link = a
+        .doors
+        .iter()
+        .find(|d| d.stair)
+        .expect("the stair links the floors");
+    assert_eq!(
+        link.sides,
+        [Some(0), Some(3)],
+        "corridor at its foot, the upper room at its head"
+    );
+    assert!(near(link.cross_m, 5.0), "3-4-5 slope: {}", link.cross_m);
+    // upper room: far corner (0, 8) to the stair head (8.3, 1), down 5 m, along the corridor
+    // from the foot (3.7, 1) to the west exit's inside point (0.12, 1), out 0.12 m
+    let up = &a.spaces[3];
+    let expect = (8.3f32 * 8.3 + 49.0).sqrt() + 5.0 + 3.58 + 0.12;
+    assert!(
+        near(up.travel_m.unwrap(), expect),
+        "{:?} vs {expect}",
+        up.travel_m
+    );
+    // its path starts upstairs and ends at the ground-floor exit
+    assert!(
+        near(up.path[0][1], 3.0) && near(up.path.last().unwrap()[1], 0.0),
+        "{:?}",
+        up.path
+    );
+    // the corridor still has two exits of its own
+    assert_eq!(a.spaces[0].common_path_m, Some(0.0));
+}
+
+#[test]
+fn open_plan_rooms_connect_where_no_wall_divides_them() {
+    let mut p = project();
+    // kitchen x 0..4 and living room x 4..10 (z 0..5), walls only around the outside, a
+    // stub wall on the shared line from z 0 to 2: open from z 2 to 5
+    let outer = walls(
+        &mut p,
+        &[[0., 0.], [10., 0.], [10., 5.], [0., 5.], [0., 0.]],
+    );
+    walls(&mut p, &[[4., 0.], [4., 2.]]);
+    door(&mut p, "Front door", outer[1], 2.0, true); // east wall (10,0)->(10,5): centre (10, 2.5)
+    room(&mut p, "Kitchen", &[[0., 0.], [4., 0.], [4., 5.], [0., 5.]]);
+    room(
+        &mut p,
+        "Living",
+        &[[4., 0.], [10., 0.], [10., 5.], [4., 5.]],
+    );
+    let a = analyze(&p);
+    let open: Vec<_> = a
+        .doors
+        .iter()
+        .filter(|d| d.name.starts_with("open between"))
+        .collect();
+    assert_eq!(
+        open.len(),
+        1,
+        "{:?}",
+        a.doors.iter().map(|d| &d.name).collect::<Vec<_>>()
+    );
+    // open from past the stub wall (2 + 0.1 half thickness + 0.05) to short of the north
+    // wall (5 - 0.15), in 0.1 m steps: 2.2 to 4.8
+    assert!((open[0].width - 2.6).abs() <= 1e-3, "{}", open[0].width);
+    assert!(open[0].center[1] > 3.0);
+    let k = &a.spaces[0];
+    assert!(
+        k.travel_m.is_some(),
+        "the kitchen reaches the front door through the living room"
+    );
+    // with a full wall between them, no connection
+    walls(&mut p, &[[4., 2.], [4., 5.]]);
+    assert!(analyze(&p).spaces[0].travel_m.is_none());
 }

@@ -53,10 +53,11 @@ ${table(['Occupancy', 'Area#', 'Occupant load#'], c.occupancies.map(o => `<tr><t
 <h3 style="font-size:10.5pt;margin:12px 0 4px">Means of egress by story <span style="font-weight:400;color:#444">(${esc(c.cite_exits)}; ${esc(c.cite_capacity)})</span></h3>
 ${table(['Story', 'Occupant load#', 'Exits req / prov#', 'Door width req / prov#', 'Stair width req / prov#'],
   c.levels.map(l => `<tr><td>${esc(l.name)}${l.spaces_without_factor ? ` <span class="unverified">(${l.spaces_without_factor} space(s) uncounted)</span>` : ''}</td><td class="num">${l.occupant_load}</td>` +
-    `${cell(l.exits_provided, l.exits_required)}${l.exits_required} / ${l.exits_provided}</td>` +
+    `${cell(l.exits_provided, l.exits_required)}${l.exits_required} / ${l.exits_provided}${l.exits_from_plan === false ? ' *' : ''}</td>` +
     `${cell(l.door_width_provided_m, l.door_width_required_m)}${len(l.door_width_required_m)} / ${len(l.door_width_provided_m)}</td>` +
     `${l.stair_width_required_m == null ? '<td class="num">' : cell(l.stair_width_provided_m, l.stair_width_required_m)}${l.stair_width_required_m == null ? '—' : `${len(l.stair_width_required_m)} / ${len(l.stair_width_provided_m)}`}</td></tr>`),
   'No stories.')}
+<p class="none">Exits are counted from the plan: exit doors (egress doors to outside, doors into exit stairs) of each story's rooms.${c.levels.some(l => l.exits_from_plan === false) ? ' * Rooms on this story have no plan shape: exits are the egress doors assigned to its spaces by hand.' : ''}</p>
 <h3 style="font-size:10.5pt;margin:12px 0 4px">Plumbing fixtures required <span style="font-weight:400;color:#444">(${esc(c.cite_plumbing)})</span></h3>
 ${table(['Occupancy', 'Fixture', 'Occupant load#', 'Required#', 'Parameter verification'],
   c.plumbing.map(p => `<tr><td>${esc(p.occupancy)}</td><td>${esc(p.fixture)}</td><td class="num">${p.occupant_load}</td><td class="num">${p.required}${p.per_sex ? ` (${p.per_group} per sex)` : ''}</td><td class="unverified">${esc(p.verified)}</td></tr>`),
@@ -137,7 +138,7 @@ ${table(['Rule', 'Citation', 'Result', 'Parameter verification'],
 
 <h2>Spaces</h2>
 ${table(['Space', ...(levels.length ? ['Level'] : []), 'Occupancy', 'Area#', 'Occupant load#', 'Exits#', ...(walks ? ['Travel to exit#', 'Common path#'] : [])],
-  r.spaces.map(s => `<tr><td>${esc(s.name)}</td>${levels.length ? `<td>${esc(levelName(s.level))}</td>` : ''}<td>${esc(s.occupancy)}</td><td class="num">${esc(fmtArea(s.area_m2, units))}</td><td class="num">${s.occupant_load ?? '—'}</td><td class="num">${s.exits}</td>${walks ? `<td class="num">${!s.outline ? 'not checked' : s.travel_m == null ? '<span class="sev error">no route</span>' : esc(fmtLen(s.travel_m, units))}</td><td class="num">${s.outline && s.common_path_m != null ? esc(fmtLen(s.common_path_m, units)) : '—'}</td>` : ''}</tr>`),
+  r.spaces.map(s => `<tr><td>${esc(s.name)}</td>${levels.length ? `<td>${esc(levelName(s.level))}</td>` : ''}<td>${esc(s.occupancy)}</td><td class="num">${esc(fmtArea(s.area_m2, units))}</td><td class="num">${s.occupant_load ?? '—'}</td><td class="num">${s.exits}</td>${walks ? `<td class="num">${!s.outline || s.occupancy === 'Unoccupied' ? 'not checked' : s.travel_m == null ? '<span class="sev error">no route</span>' : esc(fmtLen(s.travel_m, units))}</td><td class="num">${s.outline && s.common_path_m != null ? esc(fmtLen(s.common_path_m, units)) : '—'}</td>` : ''}</tr>`),
   'No spaces defined.')}
 ${walks ? '<p class="none">Travel to exit: the longest walk from any point in the room to the nearest exit (egress door to outside, or exit stair), around walls and through doors; furniture is not modelled. Common path: walked before two routes that share no room lead to distinct exits. Rooms with no plan shape are not checked.</p>' : ''}
 

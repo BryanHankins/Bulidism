@@ -2,6 +2,7 @@
 //! Usage: bim-cli [project.json | model.ifc] [--rules rules/<project rule_set>.json] [--csv out.csv]
 //!        [--xlsx out.xlsx] [--bcf clashes.bcfzip] [--html report.html] [--sample-out sample.json]
 //!        [--baseline earlier.json|.ifc]  (prints what changed since that version)
+//!        [--doors]  (prints which rooms each door and open stair connects)
 //! --html writes a self-contained 4D viewer (three.js inlined) with all geometry, schedule,
 //! cost, clash and advisory data computed here in Rust — the hybrid render path from the plan.
 use std::{env, fs, process::ExitCode};
@@ -145,6 +146,7 @@ fn main() -> ExitCode {
         for s in &report.spaces {
             let m = |v: Option<f32>| v.map_or("—".to_string(), |v| format!("{v:.1} m"));
             let travel = match (&s.outline, s.travel_m) {
+                _ if s.occupancy == "Unoccupied" => "unoccupied: not checked".to_string(),
                 (None, _) => "no plan shape: not checked".to_string(),
                 (Some(_), None) => "NO ROUTE TO AN EXIT".to_string(),
                 (Some(_), t) => format!("travel {} · common path {}", m(t), m(s.common_path_m)),
@@ -168,6 +170,74 @@ fn main() -> ExitCode {
         println!("  {:<14} ${:>12.2}", ph.name, ph.cost_usd);
     }
     println!("  {:<14} ${:>12.2}", "TOTAL", report.total_cost_usd);
+
+    if args.iter().any(|a| a == "--doors") {
+        let eg = bim_egress::analyze(&project);
+        let room =
+            |i: Option<usize>| i.map_or("outside".to_string(), |i| project.spaces[i].name.clone());
+        println!("\nDoors and open stairs (room on each side; outside = no room)");
+        for d in &eg.doors {
+            println!(
+                "  {}{:<40} {} | {}{}",
+                if d.stair { "stair " } else { "" },
+                d.name,
+                room(d.sides[0]),
+                room(d.sides[1]),
+                if d.exit { "  [exit]" } else { "" }
+            );
+        }
+        let lonely: Vec<&str> = project
+            .spaces
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| {
+                eg.spaces[*i].analyzed && !eg.doors.iter().any(|d| d.sides.contains(&Some(*i)))
+            })
+            .map(|(_, s)| s.name.as_str())
+            .collect();
+        println!(
+            "  rooms with no door: {}",
+            if lonely.is_empty() {
+                "none".into()
+            } else {
+                lonely.join(", ")
+            }
+        );
+        // groups of rooms joined to each other but to no exit
+        let n = project.spaces.len();
+        let mut seen = vec![false; n];
+        for start in 0..n {
+            if seen[start] || !eg.spaces[start].analyzed || eg.spaces[start].travel_m.is_some() {
+                continue;
+            }
+            let (mut group, mut stack) = (vec![], vec![start]);
+            seen[start] = true;
+            while let Some(r) = stack.pop() {
+                group.push(r);
+                for d in eg.doors.iter().filter(|d| d.sides.contains(&Some(r))) {
+                    for &o in d.sides.iter().flatten() {
+                        if !seen[o] && eg.spaces[o].travel_m.is_none() {
+                            seen[o] = true;
+                            stack.push(o);
+                        }
+                    }
+                }
+            }
+            let lv = |i: usize| {
+                project.spaces[i]
+                    .level
+                    .map_or(String::new(), |l| format!(" (level {})", l.0))
+            };
+            println!(
+                "  cut off from every exit: {}",
+                group
+                    .iter()
+                    .map(|&i| format!("{}{}", project.spaces[i].name, lv(i)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
 
     if let Some(old) = &baseline {
         let c = match bim_report::build(old, rule_set.as_ref()) {

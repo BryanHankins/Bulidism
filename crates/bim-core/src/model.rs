@@ -123,14 +123,21 @@ pub enum ElementKind {
         width: f32,
         height: f32,
         is_egress: bool,
+        /// Door leaves: 1 (default), 2 for a pair, 0 for an opening with no door in it (a
+        /// cased opening). `width` is the whole opening.
+        #[serde(default = "one", skip_serializing_if = "is_one")]
+        leaves: u32,
     },
-    /// IfcStair: straight run along +X from base; risers are equal height.
+    /// IfcStair: straight run along +X from base (along +Z when `along_z`); risers are equal
+    /// height. `base` is the low corner of its footprint either way.
     Stair {
         base: Vec3,
         run_length: f32,
         total_rise: f32,
         width: f32,
         riser_count: u32,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        along_z: bool,
     },
     /// IfcRamp: straight run along +X from base.
     Ramp {
@@ -141,6 +148,13 @@ pub enum ElementKind {
     },
     /// Pre-built mesh (glTF node): sequenced/costed but not parametric.
     Mesh { asset: String, origin: Vec3 },
+}
+
+fn one() -> u32 {
+    1
+}
+fn is_one(n: &u32) -> bool {
+    *n == 1
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -202,6 +216,9 @@ pub enum Occupancy {
     Mercantile,
     Storage,
     Institutional,
+    /// Not occupied and not walked through: roofs, voids ("open to below"), shafts. No
+    /// occupant load; left out of the egress analysis.
+    Unoccupied,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

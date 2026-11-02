@@ -1,0 +1,100 @@
+{
+  "counts": {
+    "doors": 14,
+    "egress_doors": 4,
+    "levels": 4,
+    "passages": 0,
+    "slabs": 21,
+    "spaces": 21,
+    "spaces_with_outline": 17,
+    "stairs": 2,
+    "walls": 57
+  },
+  "cut_off": [],
+  "longest_walk": [
+    "Bedroom 1",
+    20.1
+  ],
+  "findings": [
+    {
+      "rule": "door.max_leaf_width",
+      "subject": "M_Single-Flush:1250mm x 2010mm:1250mm x 2010mm:146596",
+      "check": "door leaf width",
+      "measured": 1.25,
+      "verdict": "valid",
+      "note": "a 1250 mm leaf exceeds the 48 in (1219 mm) maximum"
+    },
+    {
+      "rule": "door.max_leaf_width",
+      "subject": "M_Single-Flush:1250mm x 2010mm:1250mm x 2010mm:146678",
+      "check": "door leaf width",
+      "measured": 1.25,
+      "verdict": "valid",
+      "note": "a 1250 mm leaf exceeds the 48 in (1219 mm) maximum"
+    },
+    {
+      "rule": "door.min_height",
+      "subject": "M_Single-Flush:1250mm x 2010mm:1250mm x 2010mm:146596",
+      "check": "door height",
+      "measured": 2.01,
+      "verdict": "rule_limit",
+      "note": "doors of a dwelling unit may be 78 in (1981 mm) high (IBC 1010.1.1 exception), not modelled; the IFC gives no occupancy, so spaces default to Business"
+    },
+    {
+      "rule": "door.min_height",
+      "subject": "M_Single-Flush:1250mm x 2010mm:1250mm x 2010mm:146678",
+      "check": "door height",
+      "measured": 2.01,
+      "verdict": "rule_limit",
+      "note": "doors of a dwelling unit may be 78 in (1981 mm) high (IBC 1010.1.1 exception), not modelled; the IFC gives no occupancy, so spaces default to Business"
+    },
+    {
+      "rule": "egress.door.min_clear_width",
+      "subject": "M_Single-Glass 1:0813 x 2420mm:0813 x 2420mm:171853",
+      "check": "egress door clear width",
+      "measured": 0.749,
+      "verdict": "rule_limit",
+      "note": "R-2/R-3 dwelling-unit doors not required to be accessible are exempt from the 32 in clear width (IBC 1010.1.1 exception), not modelled; the 64 mm leaf-to-clear deduction is an estimate"
+    },
+    {
+      "rule": "egress.door.min_clear_width",
+      "subject": "M_Single-Glass 1:0813 x 2420mm:0813 x 2420mm:171975",
+      "check": "egress door clear width",
+      "measured": 0.749,
+      "verdict": "rule_limit",
+      "note": "R-2/R-3 dwelling-unit doors not required to be accessible are exempt from the 32 in clear width (IBC 1010.1.1 exception), not modelled; the 64 mm leaf-to-clear deduction is an estimate"
+    },
+    {
+      "rule": "stair.geometry",
+      "subject": "Stair:Residential - 200mm Max Riser 250mm Tread:151086:1",
+      "check": "riser height",
+      "measured": 0.194,
+      "verdict": "rule_limit",
+      "note": "stairs within a dwelling unit may have 7 3/4 in risers and 10 in treads (IBC 1011.5.2 exception), not modelled; occupancy defaulted to Business"
+    },
+    {
+      "rule": "stair.geometry",
+      "subject": "Stair:Residential - 200mm Max Riser 250mm Tread:151086:1",
+      "check": "tread depth",
+      "measured": 0.25,
+      "verdict": "rule_limit",
+      "note": "stairs within a dwelling unit may have 7 3/4 in risers and 10 in treads (IBC 1011.5.2 exception), not modelled; occupancy defaulted to Business"
+    },
+    {
+      "rule": "stair.geometry",
+      "subject": "Stair:Residential - 200mm Max Riser 250mm Tread:198878:1",
+      "check": "riser height",
+      "measured": 0.194,
+      "verdict": "rule_limit",
+      "note": "stairs within a dwelling unit may have 7 3/4 in risers and 10 in treads (IBC 1011.5.2 exception), not modelled; occupancy defaulted to Business"
+    },
+    {
+      "rule": "stair.geometry",
+      "subject": "Stair:Residential - 200mm Max Riser 250mm Tread:198878:1",
+      "check": "tread depth",
+      "measured": 0.25,
+      "verdict": "rule_limit",
+      "note": "stairs within a dwelling unit may have 7 3/4 in risers and 10 in treads (IBC 1011.5.2 exception), not modelled; occupancy defaulted to Business"
+    }
+  ]
+}

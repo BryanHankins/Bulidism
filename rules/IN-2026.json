@@ -31,7 +31,9 @@
       "min_riser_m": 0.102,
       "min_tread_m": 0.279,
       "min_width_m": 1.118,
-      "verified": "2026-09-27 riser/tread per ICC IBC2024 \u00a71011.5.2 (7 in max, 4 in min, 11 in tread); width 44 in per \u00a71011.2 from secondary source \u2014 36 in exception for <50 occupants not modelled"
+      "verified": "2026-09-27 riser/tread per ICC IBC2024 \u00a71011.5.2 (7 in max, 4 in min, 11 in tread); width 44 in per \u00a71011.2 from secondary source; 36 in where the occupant load served is under 50 (\u00a71011.2 exception 1, secondary source), taking the load of the story at the stair head",
+      "min_width_m_low_load": 0.914,
+      "low_load_max_occupants": 49
     },
     {
       "id": "ramp.slope",
@@ -222,6 +224,15 @@
       "max_m": 22.86,
       "max_m_sprinklered": 38.1,
       "verified": "unverified: values from the IBC 2021 Table 1006.2.1 as recalled from secondary sources (R-2: 75 ft, 125 ft sprinklered); confirm against IBC 2024 Table 1006.2.1. Ends where two routes sharing no room lead to distinct exits"
+    },
+    {
+      "id": "egress.exit_separation",
+      "cite": "IBC 2024 \u00a71007.1.1",
+      "severity": "warning",
+      "check": "exit_separation",
+      "fraction": 0.5,
+      "fraction_sprinklered": 0.333,
+      "verified": "unverified: one-half of the maximum overall diagonal of the area served, one-third where sprinklered throughout (\u00a71007.1.1 and its exception), as recalled from secondary sources; confirm against IBC 2024. Measured between the nearest door edges (approximated as centre distance less half of each width)"
     }
   ],
   "code_summary": {
