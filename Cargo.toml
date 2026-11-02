@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/bim-core", "crates/bim-geom", "crates/bim-schedule", "crates/bim-rules", "crates/bim-takeoff", "crates/bim-report", "crates/bim-ifc", "crates/bim-cli", "crates/bim-wasm", "crates/bim-export", "crates/bim-server"]
+members = ["crates/bim-core", "crates/bim-geom", "crates/bim-schedule", "crates/bim-rules", "crates/bim-egress", "crates/bim-takeoff", "crates/bim-report", "crates/bim-ifc", "crates/bim-cli", "crates/bim-wasm", "crates/bim-export", "crates/bim-server"]
 
 [workspace.package]
 version = "0.1.0"
@@ -17,6 +17,7 @@ bim-core = { path = "crates/bim-core" }
 bim-geom = { path = "crates/bim-geom" }
 bim-schedule = { path = "crates/bim-schedule" }
 bim-rules = { path = "crates/bim-rules" }
+bim-egress = { path = "crates/bim-egress" }
 bim-takeoff = { path = "crates/bim-takeoff" }
 bim-report = { path = "crates/bim-report" }
 bim-ifc = { path = "crates/bim-ifc" }

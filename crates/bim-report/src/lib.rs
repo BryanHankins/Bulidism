@@ -5,6 +5,7 @@ use bim_core::*;
 use serde::Serialize;
 
 pub mod code;
+pub mod compare;
 pub mod readiness;
 
 #[derive(Debug, thiserror::Error)]
@@ -81,10 +82,25 @@ pub struct SpaceOut {
     /// Occupants per the rule set's area-per-occupant factor for this occupancy, if it has one.
     pub occupant_load: Option<u32>,
     pub bounds: Option<[f32; 4]>,
+    /// Plan shape used for egress (outline, or the bounds rectangle).
+    pub outline: Option<Vec<[f32; 2]>>,
+    /// Longest walk to the nearest exit (None: no plan shape, or no route to an exit).
+    pub travel_m: Option<f32>,
+    pub common_path_m: Option<f32>,
 }
 
 /// Every rule evaluated, including those with no findings, so a report shows
 /// what was checked and how far each rule's parameters are verified.
+/// The longest walk out of a room, for drawing: model coordinates at its level's floor.
+#[derive(Debug, Clone, Serialize)]
+pub struct EgressPathOut {
+    pub space: String,
+    pub level: Option<u32>,
+    pub length_m: f32,
+    pub common_path_m: f32,
+    pub points: Vec<[f32; 3]>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RuleOut {
     pub id: String,
@@ -120,6 +136,10 @@ pub struct Report {
     pub spaces: Vec<SpaceOut>,
     /// Storeys, lowest first.
     pub levels: Vec<LevelOut>,
+    pub egress_paths: Vec<EgressPathOut>,
+    /// Changes since a baseline version, when one was given (see `compare`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparison: Option<compare::Comparison>,
 }
 
 pub const CLASH_TOLERANCE_M3: f32 = 0.001;
@@ -196,6 +216,7 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
             overlap_m3: c.overlap_m3,
         })
         .collect();
+    let egress = bim_egress::analyze(project);
     let (rule_set, code_edition, rules_verified, advisories) = match rules {
         Some(rs) => (
             rs.id.clone(),
@@ -215,7 +236,7 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
                         ),
                     ));
                 }
-                adv.extend(rs.evaluate(project));
+                adv.extend(rs.evaluate_with(project, Some(&egress)));
                 adv
             },
         ),
@@ -316,10 +337,35 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
             .total_cmp(&b.elevation_m)
             .then(a.id.cmp(&b.id))
     });
+    let elev = |l: Option<LevelId>| {
+        l.and_then(|id| project.levels.iter().find(|x| x.id == id))
+            .map_or(0.0, |x| x.elevation_m)
+    };
+    let egress_paths = project
+        .spaces
+        .iter()
+        .zip(&egress.spaces)
+        .filter(|(_, e)| e.path.len() >= 2)
+        .map(|(s, e)| EgressPathOut {
+            space: s.name.clone(),
+            level: s.level.map(|l| l.0),
+            length_m: e.travel_m.unwrap_or_default(),
+            common_path_m: e.common_path_m.unwrap_or_default(),
+            points: e
+                .path
+                .iter()
+                .map(|q| [q[0], elev(s.level) + 0.05, q[1]])
+                .collect(),
+        })
+        .collect();
     let spaces = project
         .spaces
         .iter()
-        .map(|s| SpaceOut {
+        .zip(&egress.spaces)
+        .map(|(s, e)| SpaceOut {
+            outline: s.polygon(),
+            travel_m: e.travel_m,
+            common_path_m: e.common_path_m,
             name: s.name.clone(),
             occupancy: format!("{:?}", s.occupancy),
             area_m2: s.area_m2(),
@@ -332,11 +378,13 @@ pub fn build(project: &Project, rules: Option<&bim_rules::RuleSet>) -> Result<Re
         })
         .collect();
     Ok(Report {
+        comparison: None,
         spaces,
         levels,
         rules_checked,
         code_summary,
-        readiness: readiness::check(project, rules),
+        readiness: readiness::check(project, rules, Some(&egress)),
+        egress_paths,
         rules_reviewer: rules.and_then(|rs| rs.reviewer.clone()),
         project: project.name.clone(),
         rule_set,

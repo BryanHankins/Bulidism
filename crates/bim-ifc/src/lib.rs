@@ -502,6 +502,23 @@ struct Bounds {
     min: Vec3,
     max: Vec3,
 }
+/// Plan outline of an extruded space: extrusions emit each profile corner as a (base, top)
+/// pair, so the base corners in order are the floor outline. None for other geometry
+/// (B-reps, several items, non-vertical extrusions) or an unusable outline.
+fn footprint(pts: &[Vec3]) -> Option<Vec<[f32; 2]>> {
+    if pts.len() < 6 || pts.len() & 1 == 1 {
+        return None;
+    }
+    let paired = pts.chunks(2).all(|c| {
+        (c[0].x - c[1].x).abs() < 1e-3 && (c[0].z - c[1].z).abs() < 1e-3 && c[1].y > c[0].y
+    });
+    if !paired {
+        return None;
+    }
+    let o = plan::tidy(pts.chunks(2).map(|c| [c[0].x, c[0].z]).collect());
+    plan::outline_problem(&o).is_none().then_some(o)
+}
+
 fn bounds(p: &[Vec3]) -> Bounds {
     let mut b = Bounds {
         min: Vec3::splat(f32::MAX),
@@ -857,6 +874,7 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
     let mut count: BTreeMap<&str, usize> = BTreeMap::new();
     let mut space_src: Vec<u64> = Vec::new(); // IFC id of each p.spaces entry
     let (mut defaulted_occupancy, mut stairs, mut degenerate, mut sloped) = (0, 0, 0, 0);
+    let (mut outlined, mut outline_dropped) = (0, 0);
 
     for (kind, id, pts) in &found {
         let e = &f.entities[id];
@@ -1024,15 +1042,29 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
                     s.x * s.z,
                 );
                 sp.bounds = Some([b.min.x, b.min.z, s.x, s.z]);
-                // a measured floor area beats the bounding box for non-rectangular rooms
-                if let Some(q) = quant(*id, "NetFloorArea")
+                let measured = quant(*id, "NetFloorArea")
                     .or_else(|| quant(*id, "GrossFloorArea"))
                     .filter(|q| *q > 0.0)
-                {
-                    if ((q as f32) - s.x * s.z).abs() > 0.1 * s.x * s.z {
-                        sp.bounds = None;
+                    .map(|q| q as f32);
+                // the extruded floor outline is the room's real shape; kept when the file's own
+                // measured area agrees with it
+                match footprint(&pts) {
+                    Some(o) if !matches!(measured, Some(q) if (q - plan::signed_area(&o)).abs() > 0.15 * q) =>
+                    {
+                        sp.floor_area_m2 = plan::signed_area(&o);
+                        sp.outline = Some(o);
+                        outlined += 1;
                     }
-                    sp.floor_area_m2 = q as f32;
+                    found => {
+                        outline_dropped += found.is_some() as usize;
+                        // a measured floor area beats the bounding box for non-rectangular rooms
+                        if let Some(q) = measured {
+                            if (q - s.x * s.z).abs() > 0.1 * s.x * s.z {
+                                sp.bounds = None;
+                            }
+                            sp.floor_area_m2 = q;
+                        }
+                    }
                 }
                 sp.level = level_for(*id).or_else(|| {
                     let l = by_elevation(b.min.y);
@@ -1269,6 +1301,17 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
     if count.contains_key("doors") {
         let eg = doors.values().filter(|(_, e)| *e).count();
         notes.push(format!("{eg} door(s) marked egress from their FireExit property; check egress doors per space in Edit → Spaces."));
+    }
+    let n_spaces = p.spaces.len();
+    if n_spaces > 0 {
+        notes.push(format!(
+            "{outlined} of {n_spaces} space(s) have their room outline (from the extruded floor profile); the rest are rectangles or areas only{}, so travel distance is not checked for them.",
+            if outline_dropped > 0 {
+                format!(" ({outline_dropped} outline(s) disagreed with the file's measured area by more than 15% and were not used)")
+            } else {
+                String::new()
+            }
+        ));
     }
     if defaulted_occupancy > 0 {
         notes.push(format!("{defaulted_occupancy} space(s) had no IBC occupancy (OccupancyType) and were set to Business; review in Edit → Spaces."));

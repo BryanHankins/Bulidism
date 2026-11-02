@@ -119,3 +119,38 @@ fn writes_xlsx_and_bcf() {
         assert_eq!(&std::fs::read(f).unwrap()[..4], b"PK\x03\x04");
     }
 }
+
+#[test]
+fn baseline_prints_changes() {
+    let dir = std::env::temp_dir().join("bim-cli-baseline");
+    std::fs::create_dir_all(&dir).unwrap();
+    let rev = dir.join("rev.json");
+    let mut p: serde_json::Value =
+        serde_json::from_str(include_str!("../../../assets/sample_office.json")).unwrap();
+    p["elements"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|e| e["name"] != "Column 4");
+    std::fs::write(&rev, p.to_string()).unwrap();
+    let (ok, out, err) = run(&[
+        rev.to_str().unwrap(),
+        "--baseline",
+        "assets/sample_office.json",
+    ]);
+    assert!(ok, "{err}");
+    for needle in [
+        "Changes since baseline 'Sample Office'",
+        "Elements       12 -> 11",
+        "Clashes        4 -> 3",
+        "clash - North wall <-> Column 4",
+        "element - Column 4",
+        "2 finding(s) unchanged",
+    ] {
+        assert!(out.contains(needle), "missing {needle:?} in:\n{out}");
+    }
+    let (ok, _, err) = run(&["--baseline", "nope.json"]);
+    assert!(
+        !ok && err.contains("cannot load baseline nope.json"),
+        "{err}"
+    );
+}

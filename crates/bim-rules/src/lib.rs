@@ -45,6 +45,26 @@ pub enum Check {
         max_rise_m: f32,
         min_width_m: f32,
     },
+    /// Exit access travel distance: the longest walk from a room of `occupancy` to the nearest
+    /// exit, around walls and through doors (see `bim_egress`). Rooms with no plan shape are
+    /// not checked; a room with no walking route to an exit is flagged.
+    TravelDistance {
+        occupancy: Occupancy,
+        max_m: f32,
+        max_m_sprinklered: f32,
+    },
+    /// Common path of egress travel: walked before two routes to distinct exits that share no
+    /// room are available. `max_m_low_load` applies at or below `low_load_max_occupants`
+    /// (the room's occupant load) when not sprinklered.
+    CommonPath {
+        occupancy: Occupancy,
+        max_m: f32,
+        max_m_sprinklered: f32,
+        #[serde(default)]
+        low_load_max_occupants: Option<u32>,
+        #[serde(default)]
+        max_m_low_load: Option<f32>,
+    },
     /// Occupant load = area / factor; spaces over the single-exit limit with one exit are flagged.
     OccupantLoadExits {
         occupancy: Occupancy,
@@ -287,8 +307,31 @@ impl RuleSet {
             .unwrap_or(0.0)
     }
 
+    /// Whether any rule needs the egress analysis (`bim_egress::analyze`).
+    pub fn needs_egress(&self) -> bool {
+        self.rules.iter().any(|r| {
+            matches!(
+                r.check,
+                Check::TravelDistance { .. } | Check::CommonPath { .. }
+            )
+        })
+    }
+
     pub fn evaluate(&self, p: &Project) -> Vec<Advisory> {
+        let egress = self.needs_egress().then(|| bim_egress::analyze(p));
+        self.evaluate_with(p, egress.as_ref())
+    }
+
+    /// `evaluate` with an egress analysis already made (the report pipeline shares one).
+    /// Travel-distance and common-path rules are skipped without it.
+    pub fn evaluate_with(
+        &self,
+        p: &Project,
+        egress: Option<&bim_egress::Analysis>,
+    ) -> Vec<Advisory> {
         let mut out = Vec::new();
+        // findings with no measured value (the `fail` closure holds `out`)
+        let mut unmeasured = Vec::new();
         for r in &self.rules {
             // one failed check: subject, element, what, measured, bound, limit, kind, sentence
             let mut fail = |subject: &str,
@@ -523,6 +566,76 @@ impl RuleSet {
                         }
                     }
                 }
+                Check::TravelDistance {
+                    occupancy,
+                    max_m,
+                    max_m_sprinklered,
+                } => {
+                    let Some(eg) = egress else { continue };
+                    let spr = p.building.sprinklered;
+                    let lim = if spr { *max_m_sprinklered } else { *max_m };
+                    let how = if spr {
+                        "sprinklered"
+                    } else {
+                        "not sprinklered"
+                    };
+                    for (s, e) in p.spaces.iter().zip(&eg.spaces) {
+                        if s.occupancy != *occupancy || !e.analyzed || e.stair {
+                            continue;
+                        }
+                        match e.travel_m {
+                            Some(t) if t > lim => fail(&s.name, None, "exit access travel distance", t, Max, lim, Length,
+                                format!("exit access travel distance {t:.2} m from the most remote point to the nearest exit > {lim:.2} m ({how})")),
+                            Some(_) => {}
+                            None => unmeasured.push(Advisory {
+                                rule_id: r.id.clone(),
+                                cite: r.cite.clone(),
+                                severity: r.severity,
+                                subject: s.name.clone(),
+                                message: "no walking route from this room to an exit (no egress door to outside or exit stair reachable through its doors)".into(),
+                                element: None,
+                                check: Some("exit access travel distance".into()),
+                                measured: None,
+                                limit: Some(lim as f64),
+                                bound: Some(Max),
+                                measure: Some(Length),
+                            }),
+                        }
+                    }
+                }
+                Check::CommonPath {
+                    occupancy,
+                    max_m,
+                    max_m_sprinklered,
+                    low_load_max_occupants,
+                    max_m_low_load,
+                } => {
+                    let Some(eg) = egress else { continue };
+                    let spr = p.building.sprinklered;
+                    for (s, e) in p.spaces.iter().zip(&eg.spaces) {
+                        if s.occupancy != *occupancy || e.stair {
+                            continue;
+                        }
+                        let Some(cp) = e.common_path_m else { continue };
+                        let load = self
+                            .occupant_factor(s.occupancy)
+                            .map(|f| (s.area_m2() / f).ceil() as u32);
+                        let (lim, why) = match (spr, low_load_max_occupants, max_m_low_load, load) {
+                            (true, ..) => (*max_m_sprinklered, "sprinklered".to_string()),
+                            (false, Some(n), Some(m), Some(l)) if l <= *n => {
+                                (*m, format!("occupant load {l} ≤ {n}"))
+                            }
+                            (false, _, _, Some(l)) => {
+                                (*max_m, format!("occupant load {l}, not sprinklered"))
+                            }
+                            (false, ..) => (*max_m, "not sprinklered".to_string()),
+                        };
+                        if cp > lim {
+                            fail(&s.name, None, "common path of egress travel", cp, Max, lim, Length,
+                                format!("common path of egress travel {cp:.2} m before two separate routes to exits > {lim:.2} m ({why})"));
+                        }
+                    }
+                }
                 Check::OccupantLoadExits {
                     occupancy,
                     area_per_occupant_m2,
@@ -540,6 +653,7 @@ impl RuleSet {
                 }
             }
         }
+        out.extend(unmeasured);
         out
     }
 }
@@ -771,5 +885,79 @@ mod tests {
             .unwrap()
             .evaluate(&Project::new("e", "IN-2026"))
             .is_empty());
+    }
+
+    /// The sample office stretched to 70 m deep (north wall and its rear exit moved with it).
+    fn deep_office() -> Project {
+        let mut p = Project::sample();
+        for e in &mut p.elements {
+            if let ElementKind::Wall { start, end, .. } = &mut e.kind {
+                if e.name == "North wall" {
+                    start.z = 70.0;
+                    end.z = 70.0;
+                }
+            }
+        }
+        p.spaces[0].bounds = Some([0.0, 0.0, 12.0, 70.0]);
+        p
+    }
+    fn egress_findings(p: &Project) -> Vec<(String, Option<f64>, Option<f64>)> {
+        RuleSet::from_json(RS)
+            .unwrap()
+            .evaluate(p)
+            .into_iter()
+            .filter(|a| {
+                a.rule_id.starts_with("egress.travel") || a.rule_id.starts_with("egress.common")
+            })
+            .map(|a| (a.rule_id, a.measured, a.limit))
+            .collect()
+    }
+
+    #[test]
+    fn travel_distance_and_common_path() {
+        // two exits at opposite ends: about 35 m to the nearer one, and two routes from the start
+        assert_eq!(egress_findings(&deep_office()), vec![]);
+        // only the main entry is an exit: 70 m to it, all of it common path
+        let mut p = deep_office();
+        for e in &mut p.elements {
+            if let ElementKind::Door { is_egress, .. } = &mut e.kind {
+                *is_egress = e.name == "Main entry";
+            }
+        }
+        let f = egress_findings(&p);
+        assert_eq!(f.len(), 2, "{f:?}");
+        let (id, measured, limit) = &f[0];
+        assert_eq!(id, "egress.travel_distance.business");
+        assert!((measured.unwrap() - 70.3).abs() < 0.5, "{measured:?}");
+        assert!(
+            (limit.unwrap() - 60.96).abs() < 1e-3,
+            "200 ft not sprinklered"
+        );
+        // 840 m2 / 13.9 = 61 occupants > 30: 75 ft
+        assert_eq!(f[1].0, "egress.common_path.business");
+        assert!((f[1].2.unwrap() - 22.86).abs() < 1e-3);
+        // sprinklered: travel passes (300 ft), common path still fails (100 ft)
+        p.building.sprinklered = true;
+        let f = egress_findings(&p);
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!((f[0].2.unwrap() - 30.48).abs() < 1e-3);
+        // no egress door at all: flagged as no route, nothing measured
+        for e in &mut p.elements {
+            if let ElementKind::Door { is_egress, .. } = &mut e.kind {
+                *is_egress = false;
+            }
+        }
+        let f = egress_findings(&p);
+        assert_eq!(
+            f,
+            vec![(
+                "egress.travel_distance.business".to_string(),
+                None,
+                Some(91.44f32 as f64)
+            )]
+        );
+        // a space with only an area is not checked
+        p.spaces[0].bounds = None;
+        assert_eq!(egress_findings(&p), vec![]);
     }
 }

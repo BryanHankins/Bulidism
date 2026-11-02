@@ -216,6 +216,11 @@ pub struct Space {
     pub bounds: Option<[f32; 4]>,
     #[serde(default)]
     pub level: Option<LevelId>,
+    /// Room outline in plan, [x, z] corners in order (counter-clockwise preferred). When set it
+    /// is the room's shape: area, travel distance and door connections use it, and `bounds`
+    /// is only its bounding box. Rectangles drawn in the editor use `bounds` alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<Vec<[f32; 2]>>,
 }
 
 impl Space {
@@ -227,12 +232,25 @@ impl Space {
             egress_doors: vec![],
             bounds: None,
             level: None,
+            outline: None,
         }
     }
-    /// Area implied by `bounds` when present, otherwise the stated area.
+    /// Area of the outline, else of `bounds`, else the stated area.
     pub fn area_m2(&self) -> f32 {
+        if let Some(o) = self.outline.as_deref().filter(|o| o.len() >= 3) {
+            return crate::plan::signed_area(o).abs();
+        }
         self.bounds
             .map(|[_, _, sx, sz]| sx * sz)
             .unwrap_or(self.floor_area_m2)
+    }
+    /// The room's plan shape: the outline, or the `bounds` rectangle; None when the space
+    /// has only an area.
+    pub fn polygon(&self) -> Option<Vec<[f32; 2]>> {
+        if let Some(o) = self.outline.as_ref().filter(|o| o.len() >= 3) {
+            return Some(o.clone());
+        }
+        self.bounds
+            .map(|[x, z, sx, sz]| vec![[x, z], [x + sx, z], [x + sx, z + sz], [x, z + sz]])
     }
 }

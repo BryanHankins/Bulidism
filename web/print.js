@@ -2,6 +2,7 @@
 // Pure function of the engine report, so it can be tested without a browser.
 import { fmtArea, fmtVol, fmtMeasure, fmtLen } from './units.js';
 import './cites.js';
+import { totalText, measuredChange, FINDING_STATUS, MARK } from './compare.js';
 
 const { citeHtml } = globalThis.BuildsimCites;
 
@@ -17,6 +18,21 @@ function readinessBlock(items) {
   if (!items || !items.length) return '';
   return `<h2>Model readiness</h2><ul style="margin:4px 0 0;padding-left:18px">${items.map(i =>
     `<li${i.severity === 'warning' ? ' class="sev warning" style="font-weight:400"' : ''}>${i.count ? i.count + ' ' : ''}${esc(i.message)}${i.examples.length ? ` (${i.examples.map(esc).join(', ')}${i.count > i.examples.length ? ', …' : ''})` : ''}</li>`).join('')}</ul>`;
+}
+
+/** Changes since the baseline version (revision narrative for a reissue); empty without one. */
+function changesBlock(c, units, table) {
+  if (!c) return '';
+  const totals = c.totals.filter(t => t.before !== t.after);
+  const rows = [];
+  for (const f of c.findings) rows.push(`<tr><td>Finding</td><td class="sev ${esc(f.finding.severity)}">${FINDING_STATUS[f.status]}</td><td>${esc(f.finding.subject)}</td><td>${esc(f.finding.check || f.finding.message)}${measuredChange(f, units) ? ` (${esc(measuredChange(f, units))})` : ''}</td></tr>`);
+  for (const k of c.clashes) rows.push(`<tr><td>Clash</td><td>${k.status === 'added' ? 'New' : 'Resolved'}</td><td>${esc(k.a_name)}</td><td>with ${esc(k.b_name)}</td></tr>`);
+  for (const e of c.elements) rows.push(`<tr><td>Element</td><td>${MARK[e.status]} ${e.status}</td><td>${esc(e.name)}</td><td>${esc(e.aspects.join(', '))}</td></tr>`);
+  for (const sp of c.spaces) rows.push(`<tr><td>Space</td><td>${MARK[sp.status]} ${sp.status}</td><td>${esc(sp.name)}</td><td>${esc(sp.aspects.join(', '))}</td></tr>`);
+  return `<h2>Changes since ${esc(c.label || c.baseline)}</h2>` +
+    (totals.length ? `<p class="meta">${totals.map(t => { const x = totalText(t); return `${esc(t.label)} ${x.before} → <b>${x.after}</b> (${x.delta})`; }).join(' · ')}</p>` : '') +
+    table(['Item', 'Change', 'Element / space', 'Detail'], rows, 'No changes.') +
+    (c.unchanged_findings ? `<p class="none">${c.unchanged_findings} finding${c.unchanged_findings === 1 ? '' : 's'} unchanged.</p>` : '');
 }
 
 /** The code analysis sheet ("code data block"); empty when the rule set has no parameters. */
@@ -56,6 +72,8 @@ ${table(['Occupancy', 'Fixture', 'Occupant load#', 'Required#', 'Parameter verif
  */
 export function printHtml(r, units, now = new Date()) {
   const name = id => (r.elements.find(e => e.id === id) || {}).name || '?';
+  // walking distances shown when any room has a plan shape
+  const walks = (r.spaces || []).some(s => s.outline);
   const levels = r.levels || [], levelName = id => (levels.find(l => l.id === id) || {}).name || '—';
   const findings = [...r.advisories].sort((a, b) => RANK[a.severity] - RANK[b.severity]);
   const count = s => r.advisories.filter(a => a.severity === s).length;
@@ -104,6 +122,7 @@ tr { break-inside: avoid; } td.num, th.num { text-align: right; white-space: now
  <div><b>${(r.rules_checked || []).length}</b>Rules checked</div><div><b>${r.clashes.length}</b>Clashes</div>
 </div>
 
+${changesBlock(r.comparison, units, table)}
 ${readinessBlock(r.readiness)}
 ${codeSheet(r.code_summary, units, table)}
 <h2>Findings</h2>
@@ -117,9 +136,10 @@ ${table(['Rule', 'Citation', 'Result', 'Parameter verification'],
   'No rule file was loaded, so no code checks ran.')}
 
 <h2>Spaces</h2>
-${table(['Space', ...(levels.length ? ['Level'] : []), 'Occupancy', 'Area#', 'Occupant load#', 'Exits#'],
-  r.spaces.map(s => `<tr><td>${esc(s.name)}</td>${levels.length ? `<td>${esc(levelName(s.level))}</td>` : ''}<td>${esc(s.occupancy)}</td><td class="num">${esc(fmtArea(s.area_m2, units))}</td><td class="num">${s.occupant_load ?? '—'}</td><td class="num">${s.exits}</td></tr>`),
+${table(['Space', ...(levels.length ? ['Level'] : []), 'Occupancy', 'Area#', 'Occupant load#', 'Exits#', ...(walks ? ['Travel to exit#', 'Common path#'] : [])],
+  r.spaces.map(s => `<tr><td>${esc(s.name)}</td>${levels.length ? `<td>${esc(levelName(s.level))}</td>` : ''}<td>${esc(s.occupancy)}</td><td class="num">${esc(fmtArea(s.area_m2, units))}</td><td class="num">${s.occupant_load ?? '—'}</td><td class="num">${s.exits}</td>${walks ? `<td class="num">${!s.outline ? 'not checked' : s.travel_m == null ? '<span class="sev error">no route</span>' : esc(fmtLen(s.travel_m, units))}</td><td class="num">${s.outline && s.common_path_m != null ? esc(fmtLen(s.common_path_m, units)) : '—'}</td>` : ''}</tr>`),
   'No spaces defined.')}
+${walks ? '<p class="none">Travel to exit: the longest walk from any point in the room to the nearest exit (egress door to outside, or exit stair), around walls and through doors; furniture is not modelled. Common path: walked before two routes that share no room lead to distinct exits. Rooms with no plan shape are not checked.</p>' : ''}
 
 <h2>Clashes</h2>
 ${table(['Element', 'Clashes with', 'Overlap#'],

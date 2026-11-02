@@ -105,6 +105,23 @@ fn architecture_sample_imports_and_runs() {
             .collect::<Vec<_>>()
     );
     assert!(p.spaces.iter().all(|s| s.level == Some(LevelId(0))));
+    // room outlines from the extruded floor profiles: the living room's notch is kept
+    let living = p.spaces.iter().find(|s| s.name == "living room").unwrap();
+    assert_eq!(living.outline.as_ref().map(Vec::len), Some(8));
+    assert!(
+        (living.area_m2() - 18.495).abs() < 0.01,
+        "{}",
+        living.area_m2()
+    );
+    let [_, _, sx, sz] = living.bounds.unwrap();
+    assert!(
+        living.area_m2() < sx * sz - 0.3,
+        "smaller than its bounding box"
+    );
+    assert!(r
+        .notes
+        .iter()
+        .any(|n| n.starts_with("2 of 2 space(s) have their room outline")));
     assert!(
         r.notes[1]
             .ends_with("2 item(s) not contained in a storey were placed on one by elevation."),

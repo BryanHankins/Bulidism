@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 bim-core.workspace = true
 bim-report.workspace = true
+bim-rules.workspace = true
 bim-ifc.workspace = true
 bim-geom.workspace = true
 bim-export.workspace = true

@@ -98,6 +98,130 @@
       "occupancy": "Educational",
       "area_per_occupant_m2": 1.86,
       "max_occupants_single_exit": 49
+    },
+    {
+      "id": "egress.travel_distance.business",
+      "cite": "IBC 2024 \u00a71017.2 / Table 1017.2",
+      "severity": "warning",
+      "check": "travel_distance",
+      "occupancy": "Business",
+      "max_m": 60.96,
+      "max_m_sprinklered": 91.44,
+      "verified": "unverified: values from the IBC 2021 Table 1017.2 as recalled from secondary sources (Group B: 200 ft, 300 ft sprinklered); confirm against IBC 2024 Table 1017.2 and Indiana amendments. Measured along the walking path around walls; furniture not modelled"
+    },
+    {
+      "id": "egress.travel_distance.assembly",
+      "cite": "IBC 2024 \u00a71017.2 / Table 1017.2",
+      "severity": "warning",
+      "check": "travel_distance",
+      "occupancy": "Assembly",
+      "max_m": 60.96,
+      "max_m_sprinklered": 76.2,
+      "verified": "unverified: values from the IBC 2021 Table 1017.2 as recalled from secondary sources (Group A: 200 ft, 250 ft sprinklered); confirm against IBC 2024 Table 1017.2 and Indiana amendments. Measured along the walking path around walls; furniture not modelled"
+    },
+    {
+      "id": "egress.travel_distance.educational",
+      "cite": "IBC 2024 \u00a71017.2 / Table 1017.2",
+      "severity": "warning",
+      "check": "travel_distance",
+      "occupancy": "Educational",
+      "max_m": 60.96,
+      "max_m_sprinklered": 76.2,
+      "verified": "unverified: values from the IBC 2021 Table 1017.2 as recalled from secondary sources (Group E: 200 ft, 250 ft sprinklered); confirm against IBC 2024 Table 1017.2 and Indiana amendments. Measured along the walking path around walls; furniture not modelled"
+    },
+    {
+      "id": "egress.travel_distance.mercantile",
+      "cite": "IBC 2024 \u00a71017.2 / Table 1017.2",
+      "severity": "warning",
+      "check": "travel_distance",
+      "occupancy": "Mercantile",
+      "max_m": 60.96,
+      "max_m_sprinklered": 76.2,
+      "verified": "unverified: values from the IBC 2021 Table 1017.2 as recalled from secondary sources (Group M: 200 ft, 250 ft sprinklered); confirm against IBC 2024 Table 1017.2 and Indiana amendments. Measured along the walking path around walls; furniture not modelled"
+    },
+    {
+      "id": "egress.travel_distance.storage",
+      "cite": "IBC 2024 \u00a71017.2 / Table 1017.2",
+      "severity": "warning",
+      "check": "travel_distance",
+      "occupancy": "Storage",
+      "max_m": 60.96,
+      "max_m_sprinklered": 76.2,
+      "verified": "unverified: values from the IBC 2021 Table 1017.2 as recalled from secondary sources (Group S-1: 200 ft, 250 ft sprinklered); confirm against IBC 2024 Table 1017.2 and Indiana amendments. Measured along the walking path around walls; furniture not modelled"
+    },
+    {
+      "id": "egress.travel_distance.residential",
+      "cite": "IBC 2024 \u00a71017.2 / Table 1017.2",
+      "severity": "warning",
+      "check": "travel_distance",
+      "occupancy": "Residential",
+      "max_m": 60.96,
+      "max_m_sprinklered": 76.2,
+      "verified": "unverified: values from the IBC 2021 Table 1017.2 as recalled from secondary sources (Group R: 200 ft, 250 ft sprinklered); confirm against IBC 2024 Table 1017.2 and Indiana amendments. Measured along the walking path around walls; furniture not modelled"
+    },
+    {
+      "id": "egress.common_path.business",
+      "cite": "IBC 2024 \u00a71006.2.1 / Table 1006.2.1",
+      "severity": "warning",
+      "check": "common_path",
+      "occupancy": "Business",
+      "max_m": 22.86,
+      "max_m_sprinklered": 30.48,
+      "low_load_max_occupants": 30,
+      "max_m_low_load": 30.48,
+      "verified": "unverified: values from the IBC 2021 Table 1006.2.1 as recalled from secondary sources (B: 100 ft at occupant load 30 or less, 75 ft above, 100 ft sprinklered); confirm against IBC 2024 Table 1006.2.1. Ends where two routes sharing no room lead to distinct exits"
+    },
+    {
+      "id": "egress.common_path.assembly",
+      "cite": "IBC 2024 \u00a71006.2.1 / Table 1006.2.1",
+      "severity": "warning",
+      "check": "common_path",
+      "occupancy": "Assembly",
+      "max_m": 22.86,
+      "max_m_sprinklered": 22.86,
+      "verified": "unverified: values from the IBC 2021 Table 1006.2.1 as recalled from secondary sources (A: 75 ft, 75 ft sprinklered); confirm against IBC 2024 Table 1006.2.1. Ends where two routes sharing no room lead to distinct exits"
+    },
+    {
+      "id": "egress.common_path.educational",
+      "cite": "IBC 2024 \u00a71006.2.1 / Table 1006.2.1",
+      "severity": "warning",
+      "check": "common_path",
+      "occupancy": "Educational",
+      "max_m": 22.86,
+      "max_m_sprinklered": 22.86,
+      "verified": "unverified: values from the IBC 2021 Table 1006.2.1 as recalled from secondary sources (E: 75 ft, 75 ft sprinklered); confirm against IBC 2024 Table 1006.2.1. Ends where two routes sharing no room lead to distinct exits"
+    },
+    {
+      "id": "egress.common_path.mercantile",
+      "cite": "IBC 2024 \u00a71006.2.1 / Table 1006.2.1",
+      "severity": "warning",
+      "check": "common_path",
+      "occupancy": "Mercantile",
+      "max_m": 22.86,
+      "max_m_sprinklered": 22.86,
+      "verified": "unverified: values from the IBC 2021 Table 1006.2.1 as recalled from secondary sources (M: 75 ft, 75 ft sprinklered); confirm against IBC 2024 Table 1006.2.1. Ends where two routes sharing no room lead to distinct exits"
+    },
+    {
+      "id": "egress.common_path.storage",
+      "cite": "IBC 2024 \u00a71006.2.1 / Table 1006.2.1",
+      "severity": "warning",
+      "check": "common_path",
+      "occupancy": "Storage",
+      "max_m": 22.86,
+      "max_m_sprinklered": 30.48,
+      "low_load_max_occupants": 29,
+      "max_m_low_load": 30.48,
+      "verified": "unverified: values from the IBC 2021 Table 1006.2.1 as recalled from secondary sources (S: 100 ft at occupant load 29 or less, 75 ft above, 100 ft sprinklered); confirm against IBC 2024 Table 1006.2.1. Ends where two routes sharing no room lead to distinct exits"
+    },
+    {
+      "id": "egress.common_path.residential",
+      "cite": "IBC 2024 \u00a71006.2.1 / Table 1006.2.1",
+      "severity": "warning",
+      "check": "common_path",
+      "occupancy": "Residential",
+      "max_m": 22.86,
+      "max_m_sprinklered": 38.1,
+      "verified": "unverified: values from the IBC 2021 Table 1006.2.1 as recalled from secondary sources (R-2: 75 ft, 125 ft sprinklered); confirm against IBC 2024 Table 1006.2.1. Ends where two routes sharing no room lead to distinct exits"
     }
   ],
   "code_summary": {
