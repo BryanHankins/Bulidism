@@ -9,7 +9,8 @@
     "spaces": 21,
     "spaces_with_outline": 17,
     "stairs": 2,
-    "walls": 57
+    "walls": 57,
+    "windows": 22
   },
   "cut_off": [],
   "longest_walk": [

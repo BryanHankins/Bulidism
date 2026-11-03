@@ -1,0 +1,38 @@
+{
+  "counts": {
+    "doors": 14,
+    "dwelling_units": 2,
+    "egress_doors": 4,
+    "levels": 4,
+    "passages": 0,
+    "slabs": 21,
+    "spaces": 21,
+    "spaces_with_outline": 17,
+    "stairs": 2,
+    "walls": 57,
+    "windows": 22
+  },
+  "cut_off": [],
+  "longest_walk": [
+    "Bedroom 1",
+    20.1
+  ],
+  "findings": [
+    {
+      "rule": "irc.stair.geometry",
+      "subject": "Stair:Residential - 200mm Max Riser 250mm Tread:151086:1",
+      "check": "tread depth",
+      "measured": 0.25,
+      "verdict": "valid",
+      "note": "250 mm treads are under the IRC 10 in (254 mm) minimum"
+    },
+    {
+      "rule": "irc.stair.geometry",
+      "subject": "Stair:Residential - 200mm Max Riser 250mm Tread:198878:1",
+      "check": "tread depth",
+      "measured": 0.25,
+      "verdict": "valid",
+      "note": "250 mm treads are under the IRC 10 in (254 mm) minimum"
+    }
+  ]
+}

@@ -53,6 +53,30 @@ pub struct DoorLink {
     pub members: Vec<ElementId>,
 }
 
+/// A window and the rooms on its two sides (None = outside or no room).
+#[derive(Debug, Clone)]
+pub struct WindowLink {
+    pub id: ElementId,
+    pub name: String,
+    pub width: f32,
+    pub height: f32,
+    /// Bottom of the opening above the host wall's base.
+    pub sill: f32,
+    pub sides: [Option<usize>; 2],
+    /// Some(false): fixed glazing.
+    pub operable: Option<bool>,
+}
+
+impl WindowLink {
+    /// The room a window to outside serves: the one side with a room, when the other has none.
+    pub fn exterior_of(&self) -> Option<usize> {
+        match self.sides {
+            [Some(i), None] | [None, Some(i)] => Some(i),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SpaceEgress {
     /// The room has a plan shape, so it was analysed.
@@ -75,6 +99,8 @@ pub struct Analysis {
     pub doors: Vec<DoorLink>,
     /// Doors with the same room on both sides (toilet stalls, cupboards): on no route.
     pub internal_doors: Vec<ElementId>,
+    /// Windows and the rooms they open from.
+    pub windows: Vec<WindowLink>,
     /// One per `Project::spaces`, same order.
     pub spaces: Vec<SpaceEgress>,
 }
@@ -561,6 +587,7 @@ fn doors(
     polys: &[Option<Vec<[f32; 2]>>],
     stair: &[bool],
     internal: &mut Vec<ElementId>,
+    windows: &mut Vec<WindowLink>,
 ) -> Vec<DoorLink> {
     let room_at = |pt: [f32; 2], level: Option<LevelId>| -> Option<usize> {
         // the smallest room containing the point (rooms drawn inside rooms)
@@ -579,16 +606,16 @@ fn doors(
     };
     let mut out = Vec::new();
     for e in &p.elements {
-        let ElementKind::Door {
-            host,
-            offset,
-            width,
-            is_egress,
-            ..
-        } = e.kind
-        else {
+        let Some((host, (offset, width, height, sill))) = e.kind.opening() else {
             continue;
         };
+        let is_egress = matches!(
+            e.kind,
+            ElementKind::Door {
+                is_egress: true,
+                ..
+            }
+        );
         let Some(h) = p.elements.iter().find(|w| w.id == host) else {
             continue;
         };
@@ -622,6 +649,21 @@ fn doors(
                 Some(i) if contains(polys[i].as_deref().unwrap(), face) => face,
                 _ => at(sign, thickness / 2.0 + PROBE_M),
             };
+        }
+        if matches!(e.kind, ElementKind::Window { .. }) {
+            windows.push(WindowLink {
+                id: e.id,
+                name: e.name.clone(),
+                width,
+                height,
+                sill,
+                sides,
+                operable: match e.kind {
+                    ElementKind::Window { operable, .. } => operable,
+                    _ => None,
+                },
+            });
+            continue;
         }
         if sides[0].is_some() && sides[0] == sides[1] {
             // a door inside one room (e.g. on a partial-height partition): no connection
@@ -820,7 +862,8 @@ pub fn analyze(p: &Project) -> Analysis {
         .collect();
     let floor: Vec<f32> = p.spaces.iter().map(|s| elev(s.level)).collect();
     let mut internal_doors = Vec::new();
-    let mut doors = doors(p, &polys, &stair, &mut internal_doors);
+    let mut windows = Vec::new();
+    let mut doors = doors(p, &polys, &stair, &mut internal_doors, &mut windows);
     doors.extend(stair_links(p, &polys, &stair));
     doors.extend(open_links(p, &polys, &stair));
     let rooms: Vec<Option<Room>> = polys.iter().map(|o| o.clone().map(Room::new)).collect();
@@ -1032,6 +1075,7 @@ pub fn analyze(p: &Project) -> Analysis {
     Analysis {
         doors,
         internal_doors,
+        windows,
         spaces,
     }
 }

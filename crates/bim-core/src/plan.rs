@@ -111,6 +111,28 @@ pub fn tidy(mut poly: Vec<[f32; 2]>) -> Vec<[f32; 2]> {
     poly
 }
 
+/// Narrowest width across a polygon: over each edge direction, the spread of the corners
+/// perpendicular to it; the least (exact for convex shapes, e.g. a room's 7 ft dimension).
+pub fn min_width(poly: &[[f32; 2]]) -> f32 {
+    let n = poly.len();
+    (0..n)
+        .filter_map(|i| {
+            let (a, b) = (poly[i], poly[(i + 1) % n]);
+            let len = dist(a, b);
+            (len > 1e-6).then(|| {
+                let nrm = [-(b[1] - a[1]) / len, (b[0] - a[0]) / len];
+                let d = |q: &[f32; 2]| (q[0] - a[0]) * nrm[0] + (q[1] - a[1]) * nrm[1];
+                let (lo, hi) = poly
+                    .iter()
+                    .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), q| {
+                        (lo.min(d(q)), hi.max(d(q)))
+                    });
+                hi - lo
+            })
+        })
+        .fold(f32::INFINITY, f32::min)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,6 +145,13 @@ mod tests {
         assert!(!contains(&L, [4.0, 4.0]), "the notch is outside");
         assert!(contains(&L, [6.0, 1.0]), "boundary counts");
         assert!(outline_problem(&L).is_none());
+    }
+
+    #[test]
+    fn narrowest_width() {
+        assert!((min_width(&[[0., 0.], [4., 0.], [4., 2.5], [0., 2.5]]) - 2.5).abs() < 1e-6);
+        // a 3-4-5 triangle: narrowest across is its height onto the long side, 2.4
+        assert!((min_width(&[[0., 0.], [4., 0.], [0., 3.]]) - 2.4).abs() < 1e-5);
     }
 
     #[test]

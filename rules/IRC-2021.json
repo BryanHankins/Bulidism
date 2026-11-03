@@ -1,0 +1,76 @@
+{
+  "id": "IRC-2021",
+  "jurisdiction": "One- and two-family dwellings and townhouses (IRC scope)",
+  "code_edition": "International Residential Code 2021 (model code, unamended)",
+  "verified": "unverified \u2014 every parameter is from memory of the IRC 2021 and secondary sources, not checked against the ICC text or any state amendments",
+  "reviewer": null,
+  "rules": [
+    {
+      "id": "irc.egress_door",
+      "cite": "IRC 2021 R311.2",
+      "severity": "error",
+      "check": "dwelling_egress_door",
+      "min_clear_width_m": 0.813,
+      "min_height_m": 1.981,
+      "leaf_to_clear_deduction_m": 0.064,
+      "verified": "unverified: one side-hinged egress door per dwelling unit, 32 in (813 mm) clear between the face of the door and the stop with the door open 90 degrees, 78 in (1981 mm) high; the 64 mm leaf-to-clear deduction is an estimate, as recalled from the IRC 2021 and secondary sources; confirm against the edition your jurisdiction adopts (in Indiana, the Indiana Residential Code, 675 IAC 14) and its amendments"
+    },
+    {
+      "id": "irc.escape_opening",
+      "cite": "IRC 2021 R310.1 / R310.2",
+      "severity": "error",
+      "check": "escape_opening",
+      "min_area_m2": 0.53,
+      "min_area_grade_m2": 0.465,
+      "min_width_m": 0.508,
+      "min_height_m": 0.61,
+      "max_sill_m": 1.118,
+      "verified": "unverified: every sleeping room: a door to outside or an emergency escape and rescue opening of at least 5.7 sf (5.0 sf at grade floor), 20 in wide, 24 in high, sill at most 44 in above the floor; checked on the window's frame opening, so a pass still needs the net clear opening confirmed, as recalled from the IRC 2021 and secondary sources; confirm against the edition your jurisdiction adopts (in Indiana, the Indiana Residential Code, 675 IAC 14) and its amendments"
+    },
+    {
+      "id": "irc.stair.geometry",
+      "cite": "IRC 2021 R311.7.1 / R311.7.5",
+      "severity": "error",
+      "check": "stair_geometry",
+      "max_riser_m": 0.196,
+      "min_riser_m": 0.0,
+      "min_tread_m": 0.254,
+      "min_width_m": 0.914,
+      "verified": "unverified: stairs 36 in (914 mm) wide, risers at most 7 3/4 in (196 mm), treads at least 10 in (254 mm); headroom, nosings and handrails not checked, as recalled from the IRC 2021 and secondary sources; confirm against the edition your jurisdiction adopts (in Indiana, the Indiana Residential Code, 675 IAC 14) and its amendments"
+    },
+    {
+      "id": "irc.stair.max_rise",
+      "cite": "IRC 2021 R311.7.3",
+      "severity": "error",
+      "check": "stair_max_rise_per_flight",
+      "max_rise_m": 3.835,
+      "verified": "unverified: at most 151 in (3835 mm) of rise between floor levels or landings, as recalled from the IRC 2021 and secondary sources; confirm against the edition your jurisdiction adopts (in Indiana, the Indiana Residential Code, 675 IAC 14) and its amendments"
+    },
+    {
+      "id": "irc.room_size",
+      "cite": "IRC 2021 R304",
+      "severity": "warning",
+      "check": "habitable_room_size",
+      "min_area_m2": 6.5,
+      "min_dimension_m": 2.134,
+      "verified": "unverified: habitable rooms (not kitchens) at least 70 sf (6.5 m2) and 7 ft (2134 mm) in any horizontal dimension; rooms classed by their use (guessed from the name unless set), as recalled from the IRC 2021 and secondary sources; confirm against the edition your jurisdiction adopts (in Indiana, the Indiana Residential Code, 675 IAC 14) and its amendments"
+    },
+    {
+      "id": "irc.ceiling_height",
+      "cite": "IRC 2021 R305.1",
+      "severity": "warning",
+      "check": "ceiling_height",
+      "min_height_m": 2.134,
+      "min_height_bathroom_m": 2.032,
+      "verified": "unverified: habitable rooms, hallways, laundry and utility rooms at least 7 ft (2134 mm), bathrooms 6 ft 8 in (2032 mm); sloped-ceiling and beam exceptions not modelled; heights from the model (an IFC space's height is often to the level above, not the ceiling), as recalled from the IRC 2021 and secondary sources; confirm against the edition your jurisdiction adopts (in Indiana, the Indiana Residential Code, 675 IAC 14) and its amendments"
+    },
+    {
+      "id": "irc.natural_light",
+      "cite": "IRC 2021 R303.1",
+      "severity": "info",
+      "check": "natural_light",
+      "min_glazing_fraction": 0.08,
+      "verified": "unverified: habitable rooms: glazing at least 8% of the floor area, unless artificial light (6 footcandles) is provided, so this is advisory; window frame area counted, openable area (4% ventilation) not checked, as recalled from the IRC 2021 and secondary sources; confirm against the edition your jurisdiction adopts (in Indiana, the Indiana Residential Code, 675 IAC 14) and its amendments"
+    }
+  ]
+}

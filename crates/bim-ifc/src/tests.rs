@@ -62,7 +62,7 @@ fn fixture_imports_every_supported_kind() {
     assert!(p.validate().is_empty(), "{:?}", p.validate());
     assert_eq!(
         r.notes[0],
-        "Imported 1 beams, 1 columns, 1 doors, 1 slabs, 1 spaces, 1 stairs, 4 walls from IFC4 (millimetres)."
+        "Imported 1 beams, 1 columns, 1 doors, 1 slabs, 1 spaces, 1 stairs, 4 walls, 1 windows from IFC4 (millimetres)."
     );
     // two storeys, lowest first, at their world elevations (3 m and 6 m)
     let lv: Vec<(&str, f32)> = p
@@ -220,8 +220,25 @@ fn fixture_imports_every_supported_kind() {
         by_name(p, "Wall A").id.0,
         guid_to_uuid("0WallA0000000000000000").unwrap()
     );
+    // the window: 1200 x 1200 mm from its OverallWidth/OverallHeight, on its host wall
+    let w = by_name(p, "Window W1");
+    let ElementKind::Window {
+        host,
+        width,
+        height,
+        sill,
+        ..
+    } = w.kind
+    else {
+        panic!()
+    };
+    assert!(near(width, 1.2) && near(height, 1.2), "{width} {height}");
+    assert!(p
+        .element(host)
+        .is_ok_and(|h| matches!(h.kind, ElementKind::Wall { .. })));
+    assert!(near(sill, 0.9), "{sill}");
     assert!(
-        r.notes.iter().any(|n| n.contains("1 IfcWindow")),
+        !r.notes.iter().any(|n| n.contains("IfcWindow")),
         "{:?}",
         r.notes
     );

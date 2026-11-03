@@ -2,7 +2,7 @@
 //! Usage: bim-cli [project.json | model.ifc] [--rules rules/<project rule_set>.json] [--csv out.csv]
 //!        [--xlsx out.xlsx] [--bcf clashes.bcfzip] [--html report.html] [--sample-out sample.json]
 //!        [--baseline earlier.json|.ifc]  (prints what changed since that version)
-//!        [--doors]  (prints which rooms each door and open stair connects)
+//!        [--doors]  (prints which rooms each door, open stair and window connects)
 //! --html writes a self-contained 4D viewer (three.js inlined) with all geometry, schedule,
 //! cost, clash and advisory data computed here in Rust — the hybrid render path from the plan.
 use std::{env, fs, process::ExitCode};
@@ -184,6 +184,17 @@ fn main() -> ExitCode {
                 room(d.sides[0]),
                 room(d.sides[1]),
                 if d.exit { "  [exit]" } else { "" }
+            );
+        }
+        for w in &eg.windows {
+            println!(
+                "  window {:<33} {} | {}  {:.2} x {:.2} m, sill {:.2} m",
+                w.name,
+                room(w.sides[0]),
+                room(w.sides[1]),
+                w.width,
+                w.height,
+                w.sill
             );
         }
         let lonely: Vec<&str> = project

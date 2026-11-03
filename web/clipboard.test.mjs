@@ -84,3 +84,13 @@ test('common value and dependency cycles', () => {
   assert.ok(dependsCycle(p, 'w1', 'c1'), 'c1 already depends on w1');
   assert.ok(!dependsCycle(p, 'c1', 'w2'));
 });
+
+test('windows ride with their wall like doors', () => {
+  const p = { elements: [
+    { id: 'w', kind: { Wall: { start: [0, 0, 0], end: [10, 0, 0], height: 3, thickness: 0.2 } } },
+    { id: 'win', kind: { Window: { host: 'w', offset: 2, width: 1.2, height: 1.2, sill: 0.9 } } },
+  ], spaces: [] };
+  moveElements(p, ['win'], 1, 5);
+  assert.equal(p.elements[1].kind.Window.offset, 3, 'slides along its wall');
+  assert.equal(deleteElements(p, ['w']), 2, 'removed with its wall');
+});

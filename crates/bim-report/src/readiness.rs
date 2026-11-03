@@ -177,6 +177,24 @@ pub fn check(
             ));
         }
     }
+    if rules.is_some_and(|rs| {
+        rs.rules
+            .iter()
+            .any(|r| matches!(r.check, bim_rules::Check::CeilingHeight { .. }))
+    }) {
+        out.extend(item(
+            "space.no_height",
+            "info",
+            "rooms with no known ceiling height: the ceiling height check skips them (Edit → Spaces → Height)".into(),
+            names(
+                &mut p
+                    .spaces
+                    .iter()
+                    .filter(|s| s.height_m.is_none() && s.occupancy != Occupancy::Unoccupied)
+                    .map(|s| &s.name),
+            ),
+        ));
+    }
     if rules.is_some() {
         out.extend(item(
             "space.no_dwelling_unit",

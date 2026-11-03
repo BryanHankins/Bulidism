@@ -128,6 +128,19 @@ pub enum ElementKind {
         #[serde(default = "one", skip_serializing_if = "is_one")]
         leaves: u32,
     },
+    /// IfcWindow: opening in a wall, from `sill` above the wall's base up `height`. host must
+    /// be a Wall.
+    Window {
+        host: ElementId,
+        offset: f32,
+        width: f32,
+        height: f32,
+        sill: f32,
+        /// Whether it opens: Some(false) for fixed glazing (cannot be an escape opening),
+        /// None when not known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operable: Option<bool>,
+    },
     /// IfcStair: straight run along +X from base (along +Z when `along_z`); risers are equal
     /// height. `base` is the low corner of its footprint either way.
     Stair {
@@ -148,6 +161,30 @@ pub enum ElementKind {
     },
     /// Pre-built mesh (glTF node): sequenced/costed but not parametric.
     Mesh { asset: String, origin: Vec3 },
+}
+
+impl ElementKind {
+    /// For a door or window: its host wall and (offset, width, height, sill).
+    pub fn opening(&self) -> Option<(ElementId, (f32, f32, f32, f32))> {
+        match *self {
+            ElementKind::Door {
+                host,
+                offset,
+                width,
+                height,
+                ..
+            } => Some((host, (offset, width, height, 0.0))),
+            ElementKind::Window {
+                host,
+                offset,
+                width,
+                height,
+                sill,
+                ..
+            } => Some((host, (offset, width, height, sill))),
+            _ => None,
+        }
+    }
 }
 
 fn one() -> u32 {
@@ -221,6 +258,89 @@ pub enum Occupancy {
     Unoccupied,
 }
 
+/// What a room is used for, as the residential code sorts rooms: habitable rooms (sleeping,
+/// living, dining, kitchen) get light, size and height requirements; sleeping rooms need an
+/// emergency escape opening.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RoomUse {
+    Sleeping,
+    Living,
+    Dining,
+    Kitchen,
+    Bathroom,
+    Circulation,
+    Storage,
+    Utility,
+    Garage,
+    Other,
+}
+
+impl RoomUse {
+    /// Living, sleeping, eating or cooking.
+    pub fn habitable(self) -> bool {
+        matches!(
+            self,
+            RoomUse::Sleeping | RoomUse::Living | RoomUse::Dining | RoomUse::Kitchen
+        )
+    }
+    /// A guess from a room name ("Bedroom 2", "Kitchen", "Hall"); Other when nothing fits.
+    pub fn from_name(name: &str) -> RoomUse {
+        let n = format!(" {} ", name.to_lowercase());
+        let has = |words: &[&str]| words.iter().any(|w| n.contains(w));
+        if has(&["bed", "sleep", "nursery", "guest room"]) {
+            RoomUse::Sleeping
+        } else if has(&["kitchen"]) {
+            RoomUse::Kitchen
+        } else if has(&["dining"]) {
+            RoomUse::Dining
+        } else if has(&["bath", " wc", "toilet", "shower", "powder", "lavatory"]) {
+            RoomUse::Bathroom
+        } else if has(&["garage", "carport"]) {
+            RoomUse::Garage
+        } else if has(&[
+            "closet", "storage", " store", "pantry", "cupboard", "wardrobe", "linen",
+        ]) {
+            RoomUse::Storage
+        } else if has(&[
+            "laundry",
+            "utility",
+            "mech",
+            "boiler",
+            "furnace",
+            "electrical",
+        ]) {
+            RoomUse::Utility
+        } else if has(&[
+            "hall",
+            "corridor",
+            "foyer",
+            "entry",
+            "vestibule",
+            "landing",
+            "stair",
+            "lobby",
+            "passage",
+        ]) {
+            RoomUse::Circulation
+        } else if has(&[
+            "living",
+            "family",
+            "lounge",
+            "den ",
+            "study",
+            "office",
+            "great room",
+            "sitting",
+            "library",
+            "rec room",
+        ]) {
+            RoomUse::Living
+        } else {
+            RoomUse::Other
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Space {
     pub name: String,
@@ -243,6 +363,12 @@ pub struct Space {
     /// exceptions (Residential only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dwelling_unit: Option<String>,
+    /// What the room is used for; None = guessed from its name (`Space::room_use`).
+    #[serde(default, rename = "room_use", skip_serializing_if = "Option::is_none")]
+    pub use_: Option<RoomUse>,
+    /// Clear height, floor to ceiling, when known (e.g. from an IFC space's geometry).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_m: Option<f32>,
 }
 
 impl Space {
@@ -256,7 +382,13 @@ impl Space {
             level: None,
             outline: None,
             dwelling_unit: None,
+            use_: None,
+            height_m: None,
         }
+    }
+    /// The room's use: as set, else guessed from its name.
+    pub fn room_use(&self) -> RoomUse {
+        self.use_.unwrap_or_else(|| RoomUse::from_name(&self.name))
     }
     /// Area of the outline, else of `bounds`, else the stated area.
     pub fn area_m2(&self) -> f32 {

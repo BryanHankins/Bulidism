@@ -28,6 +28,21 @@
       }
     },
     {
+      "id": "duplex-irc",
+      "title": "Duplex Apartment, architectural model (Autodesk Revit Architecture 2011, IFC2x3), checked against the IRC 2021 (its proper code): spaces Residential, grouped into dwelling units",
+      "file": "Duplex_A_20110907.ifc",
+      "url": "https://media.githubusercontent.com/media/buildingsmart-community/Community-Sample-Test-Files/ca3a8e2b94ef79f1a8b28ca0863a7477fb1dd92d/IFC%202.3.0.1%20(IFC%202x3)/Duplex%20Apartment/Duplex_A_20110907.ifc",
+      "sha256": "b347a2c8aa8fff6db896a4417a9c50c22ac0ccd7c5cfc22b99b8d29336c606ed",
+      "bytes": 2380763,
+      "license": "CC BY 4.0",
+      "attribution": "BSI (2020) \"Duplex Apartment Test Files,\" buildingSMART International, https://github.com/buildingsmart-community/Community-Sample-Test-Files",
+      "rules": "IRC-2021",
+      "setup": {
+        "occupancy": "Residential",
+        "dwelling_units": "suggest"
+      }
+    },
+    {
       "id": "clinic-arch",
       "title": "Medical-Dental Clinic, architectural model (Autodesk Revit, IFC2x3)",
       "file": "Clinic_Architectural.ifc",

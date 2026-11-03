@@ -180,9 +180,31 @@ fn ifc4_wall_with_window() {
             && (thickness - 0.3).abs() < 1e-3
             && (height - 2.0).abs() < 1e-3
     );
+    // the window is imported into the wall's opening
+    let w = r
+        .project
+        .elements
+        .iter()
+        .find(|e| matches!(e.kind, ElementKind::Window { .. }))
+        .expect("a window");
+    let ElementKind::Window {
+        host,
+        width,
+        height,
+        sill,
+        ..
+    } = w.kind
+    else {
+        unreachable!()
+    };
+    assert_eq!(host, r.project.elements[0].id);
     assert!(
-        r.notes.iter().any(|n| n.contains("1 IfcWindow")),
+        (width - 1.0).abs() < 1e-3 && (height - 1.0).abs() < 1e-3 && (sill - 0.5).abs() < 1e-3,
+        "{width} x {height} at {sill}"
+    );
+    assert!(
+        r.project.validate().is_empty(),
         "{:?}",
-        r.notes
+        r.project.validate()
     );
 }

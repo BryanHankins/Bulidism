@@ -31,7 +31,7 @@ pub fn quantity<L: Lookup + ?Sized>(p: &L, e: &Element) -> (f32, Unit) {
             let openings: f32 = p
                 .openings(e.id)
                 .iter()
-                .map(|(_, w, h)| w * h.min(*height))
+                .map(|(_, w, h, sill)| w * h.min((*height - sill).max(0.0)))
                 .sum();
             (
                 (start.distance(*end) * height - openings).max(0.0),
@@ -56,7 +56,7 @@ pub fn quantity<L: Lookup + ?Sized>(p: &L, e: &Element) -> (f32, Unit) {
             width,
             depth,
         } => (start.distance(*end) * width * depth, Unit::M3),
-        ElementKind::Door { .. } => (1.0, Unit::Each),
+        ElementKind::Door { .. } | ElementKind::Window { .. } => (1.0, Unit::Each),
         ElementKind::Stair { run_length, .. } => (*run_length, Unit::M),
         ElementKind::Ramp {
             run_length, width, ..

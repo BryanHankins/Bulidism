@@ -289,14 +289,9 @@ pub fn aabb<L: Lookup + ?Sized>(project: &L, e: &Element) -> Result<Aabb, GeomEr
             min: *base,
             max: *base + vec3(*run_length, *rise, *width),
         },
-        ElementKind::Door {
-            host,
-            offset,
-            width,
-            height,
-            ..
-        } => {
-            let hw = project.get(*host)?;
+        ElementKind::Door { .. } | ElementKind::Window { .. } => {
+            let (host, (offset, width, height, sill)) = e.kind.opening().expect("door or window");
+            let hw = project.get(host)?;
             let ElementKind::Wall {
                 start,
                 end,
@@ -307,12 +302,12 @@ pub fn aabb<L: Lookup + ?Sized>(project: &L, e: &Element) -> Result<Aabb, GeomEr
                 return Err(GeomError::DoorHostNotWall(e.id));
             };
             let dir = (*end - *start).normalize_or_zero();
-            let a = *start + dir * *offset;
-            let b = a + dir * *width;
+            let a = *start + dir * offset;
+            let b = a + dir * width;
             let t = thickness / 2.0 + 0.01;
             Aabb {
-                min: vec3(a.min(b).x - t, a.y, a.min(b).z - t),
-                max: vec3(a.max(b).x + t, a.y + height, a.max(b).z + t),
+                min: vec3(a.min(b).x - t, a.y + sill, a.min(b).z - t),
+                max: vec3(a.max(b).x + t, a.y + sill + height, a.max(b).z + t),
             }
         }
         ElementKind::Mesh { .. } => return Err(GeomError::NoGeometry(e.id)),
@@ -333,21 +328,36 @@ pub fn mesh_for<L: Lookup + ?Sized>(project: &L, e: &Element) -> Result<Mesh, Ge
             let y1 = y0 + height;
             let mut m = Mesh::default();
             let mut cursor = 0.0;
-            for &(off, w, h) in project.openings(e.id).iter() {
+            for &(off, w, h, sill) in project.openings(e.id).iter() {
                 let (off, w) = (off.clamp(0.0, len), w.min(len - off.clamp(0.0, len)));
                 if off > cursor {
                     m.append(oriented_segment(
                         *start, *end, cursor, off, *thickness, y0, y1, 0.0,
                     ));
                 }
-                if h < *height {
+                // wall below a window's sill and above the opening's head
+                if sill > 0.0 && off + w > cursor {
+                    let from = off.max(cursor);
                     m.append(oriented_segment(
                         *start,
                         *end,
-                        off,
+                        from,
                         off + w,
                         *thickness,
-                        y0 + h,
+                        y0,
+                        y0 + sill.min(*height),
+                        0.0,
+                    ));
+                }
+                if sill + h < *height && off + w > cursor {
+                    let from = off.max(cursor);
+                    m.append(oriented_segment(
+                        *start,
+                        *end,
+                        from,
+                        off + w,
+                        *thickness,
+                        y0 + sill + h,
                         y1,
                         0.0,
                     ));
@@ -425,14 +435,9 @@ pub fn mesh_for<L: Lookup + ?Sized>(project: &L, e: &Element) -> Result<Mesh, Ge
             rise,
             width,
         } => wedge_mesh(*base, *run_length, *rise, *width),
-        ElementKind::Door {
-            host,
-            offset,
-            width,
-            height,
-            ..
-        } => {
-            let hw = project.get(*host)?;
+        ElementKind::Door { .. } | ElementKind::Window { .. } => {
+            let (host, (offset, width, height, sill)) = e.kind.opening().expect("door or window");
+            let hw = project.get(host)?;
             let ElementKind::Wall {
                 start,
                 end,
@@ -445,11 +450,11 @@ pub fn mesh_for<L: Lookup + ?Sized>(project: &L, e: &Element) -> Result<Mesh, Ge
             oriented_segment(
                 *start,
                 *end,
-                *offset,
+                offset,
                 offset + width,
                 thickness * 0.2,
-                start.y,
-                start.y + height,
+                start.y + sill,
+                start.y + sill + height,
                 0.0,
             )
         }
@@ -489,7 +494,9 @@ fn prism<L: Lookup + ?Sized>(project: &L, e: &Element) -> Option<(Vec<Vec2>, f32
             width,
             depth,
         } => (rotated(start, end, *width), start.y, start.y + depth),
-        ElementKind::Door { .. } | ElementKind::Mesh { .. } => return None,
+        ElementKind::Door { .. } | ElementKind::Window { .. } | ElementKind::Mesh { .. } => {
+            return None
+        }
         _ => {
             let b = aabb(project, e).ok()?;
             (
@@ -678,7 +685,12 @@ pub fn clashes(project: &Project, tolerance_m3: f32) -> Vec<Clash> {
     let mut items: Vec<(&Element, Aabb)> = project
         .elements
         .iter()
-        .filter(|e| !matches!(e.kind, ElementKind::Door { .. }))
+        .filter(|e| {
+            !matches!(
+                e.kind,
+                ElementKind::Door { .. } | ElementKind::Window { .. }
+            )
+        })
         .filter_map(|e| aabb(&ix, e).ok().map(|b| (e, b)))
         .collect();
     items.sort_by(|a, b| a.1.min.x.total_cmp(&b.1.min.x));
@@ -881,7 +893,12 @@ mod tests {
         let mut items: Vec<(&Element, Aabb)> = project
             .elements
             .iter()
-            .filter(|e| !matches!(e.kind, ElementKind::Door { .. }))
+            .filter(|e| {
+                !matches!(
+                    e.kind,
+                    ElementKind::Door { .. } | ElementKind::Window { .. }
+                )
+            })
             .filter_map(|e| aabb(project, e).ok().map(|b| (e, b)))
             .collect();
         items.sort_by(|a, b| a.1.min.x.total_cmp(&b.1.min.x));

@@ -5,7 +5,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// (offset, width, height) of a door opening along its host wall.
-pub type Opening = (f32, f32, f32);
+/// A door or window in a wall: (offset along the wall, width, height, sill above its base).
+pub type Opening = (f32, f32, f32, f32);
 
 pub trait Lookup {
     /// First element with this id.
@@ -37,18 +38,8 @@ impl<'a> ProjectIndex<'a> {
         let mut openings: HashMap<ElementId, Vec<Opening>> = HashMap::new();
         for (i, e) in project.elements.iter().enumerate() {
             by_id.entry(e.id).or_insert(i);
-            if let ElementKind::Door {
-                host,
-                offset,
-                width,
-                height,
-                ..
-            } = e.kind
-            {
-                openings
-                    .entry(host)
-                    .or_default()
-                    .push((offset, width, height));
+            if let Some((host, o)) = e.kind.opening() {
+                openings.entry(host).or_default().push(o);
             }
         }
         for v in openings.values_mut() {

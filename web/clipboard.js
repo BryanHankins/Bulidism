@@ -1,9 +1,11 @@
 // Multi-element edits (delete, move, copy/paste, element dependencies, drawn spaces) as pure functions
 // of the project JSON, so the editor's rules are testable without a browser.
 
-// vector fields per element kind; [x, y, z] with y up. Doors have none (they sit on their host wall).
-const VECS = { Wall: ['start', 'end'], Slab: ['origin'], Column: ['base'], Beam: ['start', 'end'], Stair: ['base'], Ramp: ['base'], Mesh: ['origin'], Door: [] };
+// vector fields per element kind; [x, y, z] with y up. Doors and windows have none (they sit on their host wall).
+const VECS = { Wall: ['start', 'end'], Slab: ['origin'], Column: ['base'], Beam: ['start', 'end'], Stair: ['base'], Ramp: ['base'], Mesh: ['origin'], Door: [], Window: [] };
 export const kindOf = e => Object.keys(e.kind)[0];
+/** The opening (door or window) part of an element, or undefined. */
+const hosted = e => e.kind.Door || e.kind.Window;
 const clone = v => JSON.parse(JSON.stringify(v));
 
 /** Selection after a click: toggle `id` in or out when a modifier is held, else select just it. */
@@ -13,25 +15,25 @@ export function clickSelect(sel, id, toggle) {
   return sel.includes(id) ? sel.filter(x => x !== id) : [...sel, id];
 }
 
-/** Remove elements and the doors hosted on removed walls; drop dangling egress doors and dependencies.
+/** Remove elements and the doors and windows hosted on removed walls; drop dangling egress doors and dependencies.
  * Returns the number of elements removed. */
 export function deleteElements(project, ids) {
   const gone = new Set(ids), n = project.elements.length;
-  for (const e of project.elements) if (e.kind.Door && gone.has(e.kind.Door.host)) gone.add(e.id);
+  for (const e of project.elements) if (hosted(e) && gone.has(hosted(e).host)) gone.add(e.id);
   project.elements = project.elements.filter(e => !gone.has(e.id));
   for (const s of project.spaces) s.egress_doors = s.egress_doors.filter(d => !gone.has(d));
   for (const e of project.elements) if (e.depends_on) { e.depends_on = e.depends_on.filter(d => !gone.has(d)); if (!e.depends_on.length) delete e.depends_on; }
   return n - project.elements.length;
 }
 
-/** Move elements by (dx, dz) in plan. Doors slide along their wall unless the wall moves too. */
+/** Move elements by (dx, dz) in plan. Doors and windows slide along their wall unless the wall moves too. */
 export function moveElements(project, ids, dx, dz, snap = v => v) {
   const set = new Set(ids), byId = new Map(project.elements.map(e => [e.id, e]));
   let moved = 0;
   for (const id of ids) {
     const e = byId.get(id); if (!e) continue;
     const kind = kindOf(e), k = e.kind[kind];
-    if (kind === 'Door') {
+    if (kind === 'Door' || kind === 'Window') {
       if (set.has(k.host)) continue; // rides along with its wall
       const w = byId.get(k.host); if (!w || !w.kind.Wall) continue;
       const [sx,, sz] = w.kind.Wall.start, [ex,, ez] = w.kind.Wall.end, len = Math.hypot(ex - sx, ez - sz) || 1;
@@ -57,12 +59,12 @@ export function copyElements(project, ids) {
 export function pasteElements(project, clip, { uuid, dx = 1, dz = 1, snap = v => v } = {}) {
   const exists = new Set(project.elements.map(e => e.id)), map = new Map();
   for (const e of clip) map.set(e.id, uuid());
-  const keep = clip.filter(e => !e.kind.Door || map.has(e.kind.Door.host) || exists.has(e.kind.Door.host));
+  const keep = clip.filter(e => !hosted(e) || map.has(hosted(e).host) || exists.has(hosted(e).host));
   for (const e of clip) if (!keep.includes(e)) map.delete(e.id);
   const out = keep.map(src => {
     const e = clone(src), kind = kindOf(e), k = e.kind[kind];
     e.id = map.get(src.id);
-    if (kind === 'Door') {
+    if (kind === 'Door' || kind === 'Window') {
       if (map.has(k.host)) k.host = map.get(k.host);
       else { // same wall as the original: slide along it by the paste offset (at least a door width) so the openings don't overlap
         const w = project.elements.find(x => x.id === k.host);

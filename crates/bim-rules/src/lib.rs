@@ -87,6 +87,43 @@ pub enum Check {
         fraction: f32,
         fraction_sprinklered: f32,
     },
+    /// Emergency escape and rescue opening (IRC R310): every sleeping room needs a door to
+    /// outside, or a window to outside whose opening is at least `min_area_m2`
+    /// (`min_area_grade_m2` on the lowest story), `min_width_m` wide and `min_height_m` high,
+    /// with its sill at most `max_sill_m` above the floor. Windows are measured by their frame
+    /// opening, which is larger than the net clear opening, so a failure is certain and a pass
+    /// still needs the window's clear opening checked.
+    EscapeOpening {
+        min_area_m2: f32,
+        min_area_grade_m2: f32,
+        min_width_m: f32,
+        min_height_m: f32,
+        max_sill_m: f32,
+    },
+    /// Egress door (IRC R311.2): each dwelling unit (or the building, without units) needs a
+    /// door to outside giving `min_clear_width_m` (leaf less `leaf_to_clear_deduction_m`) and
+    /// `min_height_m`.
+    DwellingEgressDoor {
+        min_clear_width_m: f32,
+        min_height_m: f32,
+        leaf_to_clear_deduction_m: f32,
+    },
+    /// Natural light (IRC R303.1): window area to outside of each habitable room at least
+    /// `min_glazing_fraction` of its floor area. (Artificial light may substitute: advisory.)
+    NaturalLight { min_glazing_fraction: f32 },
+    /// Habitable room size (IRC R304): at least `min_area_m2` and `min_dimension_m` in every
+    /// horizontal direction; kitchens excepted.
+    HabitableRoomSize {
+        min_area_m2: f32,
+        min_dimension_m: f32,
+    },
+    /// Ceiling height (IRC R305): habitable rooms, halls, laundry and utility rooms at least
+    /// `min_height_m`, bathrooms `min_height_bathroom_m`. Rooms with no known height are not
+    /// checked.
+    CeilingHeight {
+        min_height_m: f32,
+        min_height_bathroom_m: f32,
+    },
     /// Occupant load = area / factor; spaces over the single-exit limit with one exit are flagged.
     OccupantLoadExits {
         occupancy: Occupancy,
@@ -228,6 +265,10 @@ pub enum Measure {
     /// run per unit rise, e.g. 12 for 1:12
     Ratio,
     Count,
+    /// square metres
+    Area,
+    /// a fraction, 0.08 = 8%
+    Fraction,
 }
 
 /// Whether the limit is a minimum (measured must be at least it) or a maximum.
@@ -325,6 +366,19 @@ pub fn leaf_clear_width(width: f32, leaves: u32, deduction: f32) -> f32 {
     }
 }
 
+/// The lowest level holding an occupied space (the "grade floor" for escape openings).
+fn lowest_occupied_level(p: &Project) -> Option<LevelId> {
+    p.levels
+        .iter()
+        .filter(|l| {
+            p.spaces
+                .iter()
+                .any(|s| s.level == Some(l.id) && s.occupancy != Occupancy::Unoccupied)
+        })
+        .min_by(|a, b| a.elevation_m.total_cmp(&b.elevation_m))
+        .map(|l| l.id)
+}
+
 impl RuleSet {
     pub fn from_json(s: &str) -> Result<Self, RuleError> {
         Ok(serde_json::from_str(s)?)
@@ -375,6 +429,9 @@ impl RuleSet {
             matches!(
                 r.check,
                 Check::TravelDistance { .. }
+                    | Check::EscapeOpening { .. }
+                    | Check::DwellingEgressDoor { .. }
+                    | Check::NaturalLight { .. }
                     | Check::CommonPath { .. }
                     | Check::DoorMinHeight { .. }
                     | Check::EgressDoorMinWidth { .. }
@@ -440,7 +497,7 @@ impl RuleSet {
                 })
             };
             use Bound::{Max, Min};
-            use Measure::{Count, Length, Ratio};
+            use Measure::{Area, Count, Fraction, Length, Ratio};
             match &r.check {
                 Check::EgressDoorMinWidth {
                     min_clear_width_m: lim,
@@ -880,6 +937,248 @@ impl RuleSet {
                                 fail(&name, None, "exit separation", sep, Min, need, Length,
                                     format!("exits from {name} {sep:.2} m apart; {need:.2} m needed ({f:.3} of the {diag:.2} m diagonal, {how})"));
                             }
+                        }
+                    }
+                }
+                Check::EscapeOpening {
+                    min_area_m2,
+                    min_area_grade_m2,
+                    min_width_m,
+                    min_height_m,
+                    max_sill_m,
+                } => {
+                    let Some(eg) = egress else { continue };
+                    let lowest = lowest_occupied_level(p);
+                    for (i, s) in p.spaces.iter().enumerate() {
+                        if s.room_use() != RoomUse::Sleeping
+                            || !eg.spaces[i].analyzed
+                            || s.occupancy == Occupancy::Unoccupied
+                        {
+                            continue;
+                        }
+                        // a door straight to outside is an escape opening
+                        if eg.doors.iter().any(|d| {
+                            !d.stair
+                                && d.members.len() == 1
+                                && matches!(d.sides, [Some(a), None] | [None, Some(a)] if a == i)
+                        }) {
+                            continue;
+                        }
+                        let min_area = if s.level.is_some() && s.level == lowest {
+                            *min_area_grade_m2
+                        } else {
+                            *min_area_m2
+                        };
+                        let all: Vec<_> = eg
+                            .windows
+                            .iter()
+                            .filter(|w| w.exterior_of() == Some(i))
+                            .collect();
+                        // fixed glazing cannot be opened to escape
+                        let wins: Vec<_> = all
+                            .iter()
+                            .copied()
+                            .filter(|w| w.operable != Some(false))
+                            .collect();
+                        let ok = |w: &&bim_egress::WindowLink| {
+                            w.width * w.height >= min_area - 1e-4
+                                && w.width >= *min_width_m - 1e-4
+                                && w.height >= *min_height_m - 1e-4
+                                && w.sill <= *max_sill_m + 1e-4
+                        };
+                        if wins.iter().any(ok) {
+                            continue;
+                        }
+                        let Some(w) = wins
+                            .iter()
+                            .max_by(|a, b| (a.width * a.height).total_cmp(&(b.width * b.height)))
+                        else {
+                            unmeasured.push(Advisory {
+                                rule_id: r.id.clone(),
+                                cite: r.cite.clone(),
+                                severity: r.severity,
+                                subject: s.name.clone(),
+                                message: if all.is_empty() {
+                                    "sleeping room with no window or door to outside: no emergency escape and rescue opening".into()
+                                } else {
+                                    format!("sleeping room whose {} window(s) to outside are all fixed glazing: no emergency escape and rescue opening", all.len())
+                                },
+                                element: None,
+                                check: Some("escape opening".into()),
+                                measured: Some(0.0),
+                                limit: Some(1.0),
+                                bound: Some(Min),
+                                measure: Some(Count),
+                            });
+                            continue;
+                        };
+                        let area = w.width * w.height;
+                        let id = Some(w.id);
+                        let gross = "frame opening; the net clear opening is smaller";
+                        if area < min_area - 1e-4 {
+                            fail(&s.name, id, "escape opening area", area, Min, min_area, Area,
+                                format!("largest window to outside ({}) opens {area:.3} m2 < {min_area:.3} m2 ({gross})", w.name));
+                        }
+                        if w.width < *min_width_m - 1e-4 {
+                            fail(&s.name, id, "escape opening width", w.width, Min, *min_width_m, Length,
+                                format!("largest window to outside ({}) is {:.3} m wide < {min_width_m:.3} m ({gross})", w.name, w.width));
+                        }
+                        if w.height < *min_height_m - 1e-4 {
+                            fail(&s.name, id, "escape opening height", w.height, Min, *min_height_m, Length,
+                                format!("largest window to outside ({}) is {:.3} m high < {min_height_m:.3} m ({gross})", w.name, w.height));
+                        }
+                        if w.sill > *max_sill_m + 1e-4 {
+                            fail(&s.name, id, "escape opening sill height", w.sill, Max, *max_sill_m, Length,
+                                format!("largest window to outside ({}) has its sill {:.3} m above the floor > {max_sill_m:.3} m", w.name, w.sill));
+                        }
+                    }
+                }
+                Check::DwellingEgressDoor {
+                    min_clear_width_m,
+                    min_height_m,
+                    leaf_to_clear_deduction_m: ded,
+                } => {
+                    let Some(eg) = egress else { continue };
+                    // units: by name, else the whole building's rooms as one
+                    let mut units: Vec<(String, Vec<usize>)> = Vec::new();
+                    for (i, s) in p.spaces.iter().enumerate() {
+                        if !eg.spaces[i].analyzed || s.occupancy == Occupancy::Unoccupied {
+                            continue;
+                        }
+                        let name = s.dwelling_unit.clone().unwrap_or_else(|| p.name.clone());
+                        match units.iter_mut().find(|(n, _)| *n == name) {
+                            Some((_, v)) => v.push(i),
+                            None => units.push((name, vec![i])),
+                        }
+                    }
+                    for (unit, rooms) in units {
+                        // doors from the unit's rooms straight to outside
+                        let doors: Vec<(&Element, f32, f32)> = eg
+                            .doors
+                            .iter()
+                            .filter(|d| !d.stair && d.members.len() == 1)
+                            .filter(|d| matches!(d.sides, [Some(a), None] | [None, Some(a)] if rooms.contains(&a)))
+                            .filter_map(|d| p.element(d.id).ok())
+                            .filter_map(|e| match e.kind {
+                                ElementKind::Door { width, height, leaves, .. } if leaves > 0 => Some((e, leaf_clear_width(width, leaves, *ded), height)),
+                                _ => None,
+                            })
+                            .collect();
+                        if doors.iter().any(|(_, c, h)| {
+                            *c >= *min_clear_width_m - 1e-4 && *h >= *min_height_m - 1e-4
+                        }) {
+                            continue;
+                        }
+                        match doors.iter().max_by(|a, b| a.1.total_cmp(&b.1)) {
+                            None => unmeasured.push(Advisory {
+                                rule_id: r.id.clone(),
+                                cite: r.cite.clone(),
+                                severity: r.severity,
+                                subject: unit.clone(),
+                                message: format!("{unit}: no door to outside (egress door)"),
+                                element: None,
+                                check: Some("egress door".into()),
+                                measured: Some(0.0),
+                                limit: Some(1.0),
+                                bound: Some(Min),
+                                measure: Some(Count),
+                            }),
+                            Some((e, c, h)) => {
+                                if *c < *min_clear_width_m - 1e-4 {
+                                    fail(&unit, Some(e.id), "egress door clear width", *c, Min, *min_clear_width_m, Length,
+                                        format!("{unit}: widest door to outside ({}) gives {c:.3} m clear < {min_clear_width_m:.3} m", e.name));
+                                }
+                                if *h < *min_height_m - 1e-4 {
+                                    fail(&unit, Some(e.id), "egress door height", *h, Min, *min_height_m, Length,
+                                        format!("{unit}: widest door to outside ({}) is {h:.3} m high < {min_height_m:.3} m", e.name));
+                                }
+                            }
+                        }
+                    }
+                }
+                Check::NaturalLight {
+                    min_glazing_fraction,
+                } => {
+                    let Some(eg) = egress else { continue };
+                    for (i, s) in p.spaces.iter().enumerate() {
+                        if !s.room_use().habitable()
+                            || !eg.spaces[i].analyzed
+                            || s.occupancy == Occupancy::Unoccupied
+                        {
+                            continue;
+                        }
+                        let glass: f32 = eg
+                            .windows
+                            .iter()
+                            .filter(|w| w.exterior_of() == Some(i))
+                            .map(|w| w.width * w.height)
+                            .sum();
+                        let frac = glass / s.area_m2().max(1e-6);
+                        if frac + 1e-6 < *min_glazing_fraction {
+                            fail(&s.name, None, "glazing area", frac, Min, *min_glazing_fraction, Fraction,
+                                format!("windows to outside {glass:.2} m2 = {:.1}% of the {:.1} m2 floor < {:.0}% (unless artificial light is provided)", frac * 100.0, s.area_m2(), min_glazing_fraction * 100.0));
+                        }
+                    }
+                }
+                Check::HabitableRoomSize {
+                    min_area_m2,
+                    min_dimension_m,
+                } => {
+                    for s in &p.spaces {
+                        let u = s.room_use();
+                        if !u.habitable()
+                            || u == RoomUse::Kitchen
+                            || s.occupancy == Occupancy::Unoccupied
+                        {
+                            continue;
+                        }
+                        let area = s.area_m2();
+                        if area < *min_area_m2 - 1e-4 {
+                            fail(
+                                &s.name,
+                                None,
+                                "habitable room area",
+                                area,
+                                Min,
+                                *min_area_m2,
+                                Area,
+                                format!("habitable room {area:.2} m2 < {min_area_m2:.2} m2"),
+                            );
+                        }
+                        if let Some(w) = s.polygon().as_deref().map(bim_core::plan::min_width) {
+                            if w < *min_dimension_m - 1e-3 {
+                                fail(&s.name, None, "habitable room dimension", w, Min, *min_dimension_m, Length,
+                                    format!("habitable room {w:.3} m across at its narrowest < {min_dimension_m:.3} m"));
+                            }
+                        }
+                    }
+                }
+                Check::CeilingHeight {
+                    min_height_m,
+                    min_height_bathroom_m,
+                } => {
+                    for s in &p.spaces {
+                        let Some(h) = s.height_m else { continue };
+                        let lim = match s.room_use() {
+                            RoomUse::Bathroom => *min_height_bathroom_m,
+                            u if u.habitable()
+                                || matches!(u, RoomUse::Circulation | RoomUse::Utility) =>
+                            {
+                                *min_height_m
+                            }
+                            _ => continue,
+                        };
+                        if h < lim - 1e-3 {
+                            fail(
+                                &s.name,
+                                None,
+                                "ceiling height",
+                                h,
+                                Min,
+                                lim,
+                                Length,
+                                format!("ceiling height {h:.3} m < {lim:.3} m"),
+                            );
                         }
                     }
                 }
@@ -1412,6 +1711,157 @@ mod tests {
         assert_eq!(
             msg,
             vec!["door height 1.950 m < 1.981 m (within dwelling unit Apt 1)"]
+        );
+    }
+
+    const IRC: &str = include_str!("../../../rules/IRC-2021.json");
+
+    /// A 3 x 3 m bedroom (walls around it, a 0.8 m door to outside on the south wall) with
+    /// one window on the north wall.
+    fn small_house(win: (f32, f32, f32)) -> Project {
+        let mut p = Project::new("House", "IRC-2021");
+        p.phases.push(Phase {
+            id: PhaseId(0),
+            name: "p".into(),
+            duration_days: 1,
+            depends_on: vec![],
+        });
+        let wall = |p: &mut Project, a: [f32; 2], b: [f32; 2]| {
+            p.add(Element::new(
+                "wall",
+                ElementKind::Wall {
+                    start: glam::vec3(a[0], 0.0, a[1]),
+                    end: glam::vec3(b[0], 0.0, b[1]),
+                    height: 2.7,
+                    thickness: 0.2,
+                },
+                Discipline::Architectural,
+                PhaseId(0),
+            ))
+        };
+        let south = wall(&mut p, [0.0, 0.0], [3.0, 0.0]);
+        wall(&mut p, [3.0, 0.0], [3.0, 3.0]);
+        let north = wall(&mut p, [3.0, 3.0], [0.0, 3.0]);
+        wall(&mut p, [0.0, 3.0], [0.0, 0.0]);
+        p.add(Element::new(
+            "Window",
+            ElementKind::Window {
+                host: north,
+                offset: 1.0,
+                width: win.0,
+                height: win.1,
+                sill: win.2,
+                operable: None,
+            },
+            Discipline::Architectural,
+            PhaseId(0),
+        ));
+        let mut s = Space::new("Bedroom", Occupancy::Residential, 0.0);
+        s.outline = Some(vec![[0.0, 0.0], [3.0, 0.0], [3.0, 3.0], [0.0, 3.0]]);
+        p.spaces.push(s);
+        // the house's only door to outside, in the bedroom's south wall (a door straight to
+        // outside would itself be an escape opening, so the bedroom tests remove it)
+        p.add(Element::new(
+            "Front door",
+            ElementKind::Door {
+                host: south,
+                offset: 1.0,
+                width: 0.8,
+                height: 2.0,
+                is_egress: true,
+                leaves: 1,
+            },
+            Discipline::Architectural,
+            PhaseId(0),
+        ));
+        p
+    }
+    fn irc(p: &Project) -> Vec<(String, String)> {
+        RuleSet::from_json(IRC)
+            .unwrap()
+            .evaluate(p)
+            .into_iter()
+            .map(|a| (a.rule_id, a.check.unwrap_or_default()))
+            .collect()
+    }
+    fn without_door(mut p: Project) -> Project {
+        p.elements.retain(|e| e.name != "Front door");
+        p
+    }
+
+    #[test]
+    fn irc_escape_opening_light_and_egress_door() {
+        // 0.6 x 0.6 m window: too small an opening, too narrow, too low; 4% glazing
+        let f = irc(&without_door(small_house((0.6, 0.6, 0.9))));
+        for c in ["escape opening area", "escape opening height"] {
+            assert!(
+                f.contains(&("irc.escape_opening".into(), c.into())),
+                "{c}: {f:?}"
+            );
+        }
+        assert!(
+            !f.iter().any(|(_, c)| c == "escape opening width"),
+            "0.6 m wide is enough: {f:?}"
+        );
+        assert!(f.contains(&("irc.natural_light".into(), "glazing area".into())));
+        // no door to outside at all
+        assert!(f.contains(&("irc.egress_door".into(), "egress door".into())));
+        // a 1.0 x 1.0 m window with a 0.6 m sill passes, and gives 11% glazing
+        let f = irc(&without_door(small_house((1.0, 1.0, 0.6))));
+        assert!(
+            !f.iter()
+                .any(|(r, _)| r == "irc.escape_opening" || r == "irc.natural_light"),
+            "{f:?}"
+        );
+        // ... unless it is fixed glazing
+        let mut p = without_door(small_house((1.0, 1.0, 0.6)));
+        for e in &mut p.elements {
+            if let ElementKind::Window { operable, .. } = &mut e.kind {
+                *operable = Some(false);
+            }
+        }
+        assert!(irc(&p).contains(&("irc.escape_opening".into(), "escape opening".into())));
+        // sill 1.2 m above the floor: too high
+        let f = irc(&without_door(small_house((1.0, 1.0, 1.2))));
+        assert!(f.contains(&(
+            "irc.escape_opening".into(),
+            "escape opening sill height".into()
+        )));
+        // the 0.8 m front door: 0.736 m clear < 32 in; 2.0 m high, enough for 78 in
+        let f = irc(&small_house((1.0, 1.0, 0.6)));
+        assert!(
+            f.contains(&("irc.egress_door".into(), "egress door clear width".into())),
+            "{f:?}"
+        );
+        assert!(!f.iter().any(|(_, c)| c == "egress door height"));
+    }
+
+    #[test]
+    fn irc_room_size_and_ceiling_height() {
+        let mut p = small_house((1.0, 1.0, 0.6));
+        p.spaces[0].outline = Some(vec![[0.0, 0.0], [3.0, 0.0], [3.0, 2.0], [0.0, 2.0]]);
+        p.spaces[0].height_m = Some(2.0);
+        let f = irc(&p);
+        for c in [
+            "habitable room area",
+            "habitable room dimension",
+            "ceiling height",
+        ] {
+            assert!(
+                f.contains(&("irc.room_size".into(), c.into()))
+                    || f.contains(&("irc.ceiling_height".into(), c.into())),
+                "{c}: {f:?}"
+            );
+        }
+        // a 2.0 m bathroom ceiling is too low too (6 ft 8 in = 2.032 m), a closet is not checked
+        p.spaces[0].name = "Bathroom".into();
+        assert!(irc(&p).contains(&("irc.ceiling_height".into(), "ceiling height".into())));
+        p.spaces[0].use_ = Some(RoomUse::Storage);
+        let f = irc(&p);
+        assert!(
+            !f.iter()
+                .any(|(r, _)| r == "irc.ceiling_height" || r == "irc.room_size"),
+            "{f:?}"
         );
     }
 }
