@@ -31,6 +31,7 @@ every change in results is looked at.
 |---|---|---|---|---|---|
 | Duplex Apartment (Revit 2011), as imported | 10 | 2 | 8 | 0 | 0 |
 | Duplex, spaces set Residential and grouped into dwelling units | 8 | 8 | 0 | 0 | 0 |
+| Duplex checked against the IRC 2021 (its proper code) | 2 | 2 | 0 | 0 | 0 |
 | Medical-Dental Clinic (Revit) | 16 | 6 | 6 | 4 | 0 |
 
 Before this corpus existed the Clinic produced 187 findings, most of them false: 124 rooms

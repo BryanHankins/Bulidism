@@ -48,7 +48,7 @@ test('areas, quantities, messages, snap', () => {
   assert.equal(
     convertMessage('egress door clear width 0.686 m (leaf 0.750 m - 0.064 m) < 0.813 m', 'imperial'),
     `egress door clear width 2'-3" (leaf 2'-5 1/2" - 2 1/2") < 2'-8"`);
-  assert.equal(convertMessage('ramp slope 1:8.0 steeper than 1:12; area 3 m2', 'imperial'), 'ramp slope 1:8.0 steeper than 1:12; area 3 m2');
+  assert.equal(convertMessage('ramp slope 1:8.0 steeper than 1:12; area 3 m2', 'imperial'), 'ramp slope 1:8.0 steeper than 1:12; area 32.3 sf');
   near(snapStep('imperial'), 0.1524);
   assert.equal(fmtVol(0.15, 'imperial'), '5.3 cf');
   assert.equal(fmtVol(0.15, 'metric'), '0.150 m³');
@@ -56,4 +56,8 @@ test('areas, quantities, messages, snap', () => {
   assert.equal(fmtMeasure(8.04, 'ratio', 'metric'), '1:8.0');
   assert.equal(fmtMeasure(1, 'count', 'metric'), '1');
   assert.equal(fmtMeasure(null, 'length', 'metric'), '—');
+  assert.equal(fmtMeasure(0.53, 'area', 'imperial'), '5.7 sf');
+  assert.equal(convertMessage('opening 0.45 m2 < 0.53 m2, 0.508 m wide', 'imperial'), `opening 4.8 sf < 5.7 sf, 1'-8" wide`);
+  assert.equal(fmtMeasure(0.53, 'area', 'metric'), '0.53 m²');
+  assert.equal(fmtMeasure(0.0612, 'fraction', 'metric'), '6.1%');
 });

@@ -96,6 +96,8 @@ fn facts(model: &Model, ifc: &str) -> Expected {
             }
         }
     }
+    // the rule set the user picked for the project
+    r.project.rule_set = model.rules.clone();
     let p = &r.project;
     let rules = bim_rules::RuleSet::from_json(
         &std::fs::read_to_string(root().join(format!("rules/{}.json", model.rules))).unwrap(),
@@ -116,6 +118,7 @@ fn facts(model: &Model, ifc: &str) -> Expected {
         kind(|k| matches!(k, K::Door { leaves: 0, .. })),
     );
     counts.insert("stairs".into(), kind(|k| matches!(k, K::Stair { .. })));
+    counts.insert("windows".into(), kind(|k| matches!(k, K::Window { .. })));
     counts.insert("slabs".into(), kind(|k| matches!(k, K::Slab { .. })));
     counts.insert("levels".into(), p.levels.len());
     counts.insert("spaces".into(), p.spaces.len());

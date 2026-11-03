@@ -92,21 +92,12 @@ impl Project {
         self.levels.iter().find(|l| l.id == id)
     }
 
-    /// Doors hosted by `wall`, as (offset, width, height) sorted by offset.
-    pub fn openings_in(&self, wall: ElementId) -> Vec<(f32, f32, f32)> {
-        let mut v: Vec<(f32, f32, f32)> = self
+    /// Doors and windows hosted by `wall`, as (offset, width, height, sill) sorted by offset.
+    pub fn openings_in(&self, wall: ElementId) -> Vec<crate::Opening> {
+        let mut v: Vec<crate::Opening> = self
             .elements
             .iter()
-            .filter_map(|e| match e.kind {
-                ElementKind::Door {
-                    host,
-                    offset,
-                    width,
-                    height,
-                    ..
-                } if host == wall => Some((offset, width, height)),
-                _ => None,
-            })
+            .filter_map(|e| e.kind.opening().filter(|(h, _)| *h == wall).map(|(_, o)| o))
             .collect();
         v.sort_by(|a, b| a.0.total_cmp(&b.0));
         v
@@ -201,6 +192,12 @@ impl Project {
                     end,
                 } => *width <= 0.0 || *depth <= 0.0 || start.distance(*end) <= 0.0,
                 ElementKind::Door { width, height, .. } => *width <= 0.0 || *height <= 0.0,
+                ElementKind::Window {
+                    width,
+                    height,
+                    sill,
+                    ..
+                } => *width <= 0.0 || *height <= 0.0 || *sill < 0.0,
                 ElementKind::Stair {
                     run_length,
                     total_rise,
@@ -222,15 +219,15 @@ impl Project {
                     e.name
                 )));
             }
-            if let ElementKind::Door {
-                host,
-                offset,
-                width,
-                height,
-                ..
-            } = &e.kind
-            {
-                match ix.get(*host) {
+            if let Some((host, (offset, width, height, sill))) = e.kind.opening() {
+                let what = if matches!(e.kind, ElementKind::Window { .. }) {
+                    "window"
+                } else {
+                    "door"
+                };
+                let (offset, width) = (&offset, &width);
+                let height = sill + height;
+                match ix.get(host) {
                     Ok(Element {
                         kind:
                             ElementKind::Wall {
@@ -243,25 +240,25 @@ impl Project {
                     }) => {
                         if *offset < 0.0 {
                             errs.push(ProjectError::Invalid(format!(
-                                "door '{}' has a negative offset",
+                                "{what} '{}' has a negative offset",
                                 e.name
                             )));
                         }
                         if offset + width > start.distance(*end) + 1e-4 {
                             errs.push(ProjectError::Invalid(format!(
-                                "door '{}' extends past its host wall",
+                                "{what} '{}' extends past its host wall",
                                 e.name
                             )));
                         }
-                        if height > wh {
+                        if height > *wh + 1e-4 {
                             errs.push(ProjectError::Invalid(format!(
-                                "door '{}' taller than its host wall",
+                                "{what} '{}' taller than its host wall",
                                 e.name
                             )));
                         }
                     }
                     Ok(_) => errs.push(ProjectError::Invalid(format!(
-                        "door '{}' host is not a wall",
+                        "{what} '{}' host is not a wall",
                         e.name
                     ))),
                     Err(err) => errs.push(err),
@@ -271,9 +268,17 @@ impl Project {
         for w in &self.elements {
             if let ElementKind::Wall { .. } = w.kind {
                 let ops = ix.openings(w.id);
-                if ops.windows(2).any(|p| p[1].0 < p[0].0 + p[0].1 - 1e-4) {
+                // openings may sit above one another (a window over a door), not side by side
+                // at the same height
+                let clash = |a: &crate::Opening, b: &crate::Opening| {
+                    b.0 < a.0 + a.1 - 1e-4
+                        && a.0 < b.0 + b.1 - 1e-4
+                        && b.3 < a.3 + a.2 - 1e-4
+                        && a.3 < b.3 + b.2 - 1e-4
+                };
+                if (0..ops.len()).any(|i| (i + 1..ops.len()).any(|j| clash(&ops[i], &ops[j]))) {
                     errs.push(ProjectError::Invalid(format!(
-                        "wall '{}' has overlapping door openings",
+                        "wall '{}' has overlapping openings",
                         w.name
                     )));
                 }
@@ -534,6 +539,8 @@ impl Project {
             level: Some(LevelId(0)),
             outline: None,
             dwelling_unit: None,
+            use_: None,
+            height_m: None,
         });
         // one storey at the top of the ground slab; the entry ramp is site work
         p.levels = vec![Level {
@@ -723,6 +730,37 @@ mod tests {
         // round-trips, and older files without it still load
         p.spaces[0].outline = None;
         assert!(!p.to_json().unwrap().contains("outline"));
+    }
+
+    #[test]
+    fn room_use_from_names() {
+        use RoomUse::*;
+        for (n, u) in [
+            ("Bedroom 2", Sleeping),
+            ("Master Bed", Sleeping),
+            ("Kitchen", Kitchen),
+            ("Living Room", Living),
+            ("Family", Living),
+            ("Bathroom 1", Bathroom),
+            ("WC", Bathroom),
+            ("Hallway", Circulation),
+            ("Foyer", Circulation),
+            ("Stair", Circulation),
+            ("Closet", Storage),
+            ("Utility", Utility),
+            ("Garage", Garage),
+            ("Room", Other),
+        ] {
+            assert_eq!(RoomUse::from_name(n), u, "{n}");
+        }
+        assert!(Sleeping.habitable() && Kitchen.habitable() && !Bathroom.habitable());
+        let mut s = Space::new("Den", Occupancy::Residential, 10.0);
+        assert_eq!(s.room_use(), Living);
+        s.use_ = Some(Sleeping);
+        assert_eq!(s.room_use(), Sleeping);
+        assert!(serde_json::to_string(&s)
+            .unwrap()
+            .contains("\"room_use\":\"Sleeping\""));
     }
 
     #[test]

@@ -64,6 +64,8 @@ const KINDS = {
             build: f => ({ Beam: { start:[f.sx,f.sy,f.sz], end:[f.ex,f.sy,f.ez], width:f.width, depth:f.depth } }), disc:'Structural', code:'B1010' },
   Door:   { fields: { host:['host wall','wall'], offset:['offset',1], width:['width',0.9], height:['height',2.1], is_egress:['egress','bool'] },
             build: f => ({ Door: { host:f.host, offset:f.offset, width:f.width, height:f.height, is_egress:!!f.is_egress } }), disc:'Architectural', code:'C1020' },
+  Window: { fields: { host:['host wall','wall'], offset:['offset',1], width:['width',1.2], height:['height',1.2], sill:['sill',0.9] },
+            build: f => ({ Window: { host:f.host, offset:f.offset, width:f.width, height:f.height, sill:f.sill } }), disc:'Architectural', code:'B2020' },
   Stair:  { fields: { x:['x',1], z:['z',3], run_length:['run',3.5], total_rise:['rise',3], width:['width',1.2], riser_count:['risers',17] },
             build: f => ({ Stair: { base:[f.x,lvlY(),f.z], run_length:f.run_length, total_rise:f.total_rise, width:f.width, riser_count:Math.round(f.riser_count) } }), disc:'Architectural', code:'C2010' },
   Ramp:   { fields: { x:['x',6], z:['z',-3], run_length:['run',2.4], rise:['rise',0.2], width:['width',1.2] },
@@ -136,8 +138,8 @@ function renderRuleSets() {
 
 
 // ---- selection + property editing ----
-const NUMERIC = { Wall:['height','thickness'], Slab:['size_x','size_z','thickness'], Column:['width','depth','height'], Beam:['width','depth'], Door:['offset','width','height'], Stair:['run_length','total_rise','width','riser_count'], Ramp:['run_length','rise','width'], Mesh:[] };
-const VEC = { Wall:['start','end'], Slab:['origin'], Column:['base'], Beam:['start','end'], Stair:['base'], Ramp:['base'], Mesh:['origin'], Door:[] };
+const NUMERIC = { Wall:['height','thickness'], Slab:['size_x','size_z','thickness'], Column:['width','depth','height'], Beam:['width','depth'], Door:['offset','width','height'], Window:['offset','width','height','sill'], Stair:['run_length','total_rise','width','riser_count'], Ramp:['run_length','rise','width'], Mesh:[] };
+const VEC = { Wall:['start','end'], Slab:['origin'], Column:['base'], Beam:['start','end'], Stair:['base'], Ramp:['base'], Mesh:['origin'], Door:[], Window:[] };
 const DISCIPLINES = ['Architectural','Structural','Mechanical','Electrical','Plumbing','Site'];
 const selectedEls = () => { const s = new Set(sel); return project.elements.filter(e => s.has(e.id)); };
 /** Change the selection (viewer highlight, property panel, element list) without re-running the engine. */
@@ -152,6 +154,7 @@ function renderProps() {
   let h = `<label class="full">Name<input name="name" value="${esc(e.name)}"></label><label>Phase<select name="phase">${phases}</select></label><label>Offset days<input name="start_offset_days" type="number" min="0" value="${e.start_offset_days||0}"></label><label>Cost code<input name="cost_code" list="costCodes" value="${esc(e.cost_code)}"></label><label>Discipline<select name="discipline">${DISCIPLINES.map(d=>`<option ${d===e.discipline?'selected':''}>${d}</option>`).join('')}</select></label><label>Level<select name="level">${levelOptions(e.level)}</select></label>`;
   for (const v of VEC[kind]) h += ['x','y','z'].map((ax,i) => `<label>${v} ${ax}${lenInput(`name="${v}.${i}"`, k[v][i])}</label>`).join('');
   for (const n of NUMERIC[kind]) h += isLen(n) ? `<label>${n}${lenInput(`name="${n}"`, k[n])}</label>` : `<label>${n}<input name="${n}" type="number" step="1" value="${k[n]}"></label>`;
+  if (kind === 'Window') h += `<label title="A fixed window cannot be an emergency escape opening">opens<select name="operable"><option value="" ${k.operable == null ? 'selected' : ''}>unknown</option><option value="1" ${k.operable === true ? 'selected' : ''}>yes</option><option value="0" ${k.operable === false ? 'selected' : ''}>no (fixed)</option></select></label>`;
   if (kind === 'Door') h += `<label>egress<select name="is_egress"><option value="1" ${k.is_egress?'selected':''}>yes</option><option value="" ${!k.is_egress?'selected':''}>no</option></select></label>`;
   // element-level schedule: own duration and predecessors (engine: depends_on / duration_days)
   const byId = new Map(project.elements.map(x => [x.id, x])), deps = e.depends_on || [];
@@ -164,7 +167,7 @@ function renderProps() {
   $('propForm').innerHTML = h;
   $('propForm').querySelectorAll('input[name],select[name]').forEach(inp => inp.onchange = () => {
     const n = inp.name, val = inp.value;
-    const len = (n.includes('.') || (n in k && isLen(n) && n !== 'is_egress')) ? parseLen(val, units) : null;
+    const len = (n.includes('.') || (n in k && isLen(n) && n !== 'is_egress' && n !== 'operable')) ? parseLen(val, units) : null;
     if (Number.isNaN(len)) { badLen(val); renderProps(); return; }
     snapshot();
     if (n === 'name' || n === 'cost_code' || n === 'discipline') e[n] = val;
@@ -172,6 +175,7 @@ function renderProps() {
     else if (n === 'duration_days') { if (val.trim() === '') delete e.duration_days; else e.duration_days = Math.max(0, Math.round(+val) || 0); }
     else if (n === 'level') e.level = val === '' ? null : +val;
     else if (n === 'is_egress') k.is_egress = !!val;
+    else if (n === 'operable') { if (val === '') delete k.operable; else k.operable = val === '1'; }
     else if (n.includes('.')) { const [v,i] = n.split('.'); k[v][+i] = len; }
     else k[n] = n === 'riser_count' ? Math.max(1, Math.round(+val)) : len;
     rerun();
@@ -236,6 +240,21 @@ function onViewHandle(id, idx, x, z) {
 // ---- spaces ----
 const OCCUPANCIES = ['Assembly','Business','Educational','Residential','Mercantile','Storage','Institutional','Unoccupied'];
 // occupancy for new spaces (+ space and the drag tool), remembered per browser
+const ROOM_USES = ['Sleeping', 'Living', 'Dining', 'Kitchen', 'Bathroom', 'Circulation', 'Storage', 'Utility', 'Garage', 'Other'];
+// same guess as the engine (RoomUse::from_name), for the editor's label
+function guessUse(name) {
+  const n = ` ${String(name).toLowerCase()} `, has = ws => ws.some(w => n.includes(w));
+  if (has(['bed', 'sleep', 'nursery', 'guest room'])) return 'Sleeping';
+  if (has(['kitchen'])) return 'Kitchen';
+  if (has(['dining'])) return 'Dining';
+  if (has(['bath', ' wc', 'toilet', 'shower', 'powder', 'lavatory'])) return 'Bathroom';
+  if (has(['garage', 'carport'])) return 'Garage';
+  if (has(['closet', 'storage', ' store', 'pantry', 'cupboard', 'wardrobe', 'linen'])) return 'Storage';
+  if (has(['laundry', 'utility', 'mech', 'boiler', 'furnace', 'electrical'])) return 'Utility';
+  if (has(['hall', 'corridor', 'foyer', 'entry', 'vestibule', 'landing', 'stair', 'lobby', 'passage'])) return 'Circulation';
+  if (has(['living', 'family', 'lounge', 'den ', 'study', 'office', 'great room', 'sitting', 'library', 'rec room'])) return 'Living';
+  return 'Other';
+}
 let spaceOcc = OCCUPANCIES.includes(store.get('buildsim.spaceOcc')) ? store.get('buildsim.spaceOcc') : 'Business';
 function renderSpaces() {
   const doors = project.elements.filter(e => e.kind.Door);
@@ -247,6 +266,8 @@ function renderSpaces() {
       <div style="display:flex;gap:6px"><input data-sp="${i}" data-f="name" value="${esc(s.name)}" style="flex:1"><button data-del="${i}" class="btn">✕</button></div>
       <label class="chk">Occupancy<select data-sp="${i}" data-f="occupancy">${opts}</select></label>
       <label class="chk">Level<select data-sp="${i}" data-f="level">${levelOptions(s.level)}</select></label>
+      <label class="chk" title="Guessed from the name when not set; decides which rooms are habitable or sleeping rooms">Use<select data-sp="${i}" data-f="room_use"><option value="">guess (${esc(guessUse(s.name))})</option>${ROOM_USES.map(u => `<option ${u === s.room_use ? 'selected' : ''}>${u}</option>`).join('')}</select></label>
+      <label class="chk" title="Floor to ceiling, when known">Height${lenInput(`data-sp="${i}" data-f="height_m" style="width:80px" placeholder="unknown"`, s.height_m ?? '')}</label>
       ${s.occupancy === 'Residential' ? `<label class="chk" title="Spaces with the same unit name form one dwelling unit; doors and stairs within a unit get the dwelling-unit exceptions">Dwelling unit<input data-sp="${i}" data-f="dwelling_unit" value="${esc(s.dwelling_unit || '')}" placeholder="none" style="width:90px"></label>` : ''}
       ${s.outline ? `<div style="font-size:12px;color:var(--muted)">Room outline: ${s.outline.length} corners, ${fmtArea(Math.abs(s.outline.reduce((a, p, k, o) => a + p[0] * o[(k + 1) % o.length][1] - o[(k + 1) % o.length][0] * p[1], 0)) / 2, units)} (editing the rectangle below replaces it)</div>` : ''}
       <label class="chk" style="font-size:12px"><input type="checkbox" data-sp="${i}" data-f="useBounds" ${b ? 'checked' : ''}> area from plan rectangle</label>
@@ -256,7 +277,7 @@ function renderSpaces() {
   }).join('') + '<button class="btn" id="addSpace">+ space</button>' +
     (project.spaces.some(s => s.occupancy === 'Residential') ? ' <button class="btn" id="groupUnits" title="Group Residential rooms joined by doors, openings or stairs (not through corridors or lobbies) into dwelling units">Group into units</button>' : '');
   $('spaceEdit').querySelectorAll('[data-f],[data-b]').forEach(inp => inp.onchange = () => {
-    const v = inp.dataset.b !== undefined ? parseLen(inp.value, units) : inp.dataset.f === 'floor_area_m2' ? parseArea(inp.value, units) : 0;
+    const v = inp.dataset.b !== undefined || (inp.dataset.f === 'height_m' && inp.value.trim()) ? parseLen(inp.value, units) : inp.dataset.f === 'floor_area_m2' ? parseArea(inp.value, units) : 0;
     if (Number.isNaN(v)) { badLen(inp.value); renderSpaces(); return; }
     snapshot(); const sp = project.spaces[+inp.dataset.sp];
     // editing the rectangle replaces an imported room outline with it
@@ -265,6 +286,8 @@ function renderSpaces() {
     else if (inp.dataset.f === 'useBounds') { sp.bounds = inp.checked ? [0, 0, Math.sqrt(sp.floor_area_m2) || 4, Math.sqrt(sp.floor_area_m2) || 4] : null; if (sp.bounds) sp.floor_area_m2 = sp.bounds[2] * sp.bounds[3]; }
     else if (inp.dataset.f === 'floor_area_m2') sp.floor_area_m2 = v;
     else if (inp.dataset.f === 'level') sp.level = inp.value === '' ? null : +inp.value;
+    else if (inp.dataset.f === 'height_m') { if (inp.value.trim()) sp.height_m = v; else delete sp.height_m; }
+    else if (inp.dataset.f === 'room_use') { if (inp.value) sp.room_use = inp.value; else delete sp.room_use; }
     else if (inp.dataset.f === 'dwelling_unit') { if (inp.value.trim()) sp.dwelling_unit = inp.value.trim(); else delete sp.dwelling_unit; }
     else sp[inp.dataset.f] = inp.value;
     rerun();
@@ -292,7 +315,7 @@ $('showSpaces').onchange = e => window.__viewer.setSpacesVisible(e.target.checke
 
 // ---- unit costs ----
 // takeoff unit per element kind; mirrors bim_takeoff::quantity
-const UNIT_OF = { Wall: 'M2', Slab: 'M3', Column: 'M3', Beam: 'M3', Door: 'Each', Stair: 'M', Ramp: 'M2', Mesh: 'Each' };
+const UNIT_OF = { Wall: 'M2', Slab: 'M3', Column: 'M3', Beam: 'M3', Door: 'Each', Window: 'Each', Stair: 'M', Ramp: 'M2', Mesh: 'Each' };
 function rateRows() {
   return costRows(project.unit_costs, project.elements.map(e => ({ cost_code: e.cost_code, unit: UNIT_OF[Object.keys(e.kind)[0]] })));
 }
@@ -565,7 +588,7 @@ $('addForm').onsubmit = ev => {
   for (const [n, v] of fd) f[n] = (n === 'host' || n === 'name' || n === 'phase') ? v : n === 'is_egress' ? !!v : n === 'riser_count' ? +v : parseLen(v, units);
   const bad = Object.entries(f).find(([n, v]) => typeof v === 'number' && Number.isNaN(v));
   if (bad) { badLen(fd.get(bad[0])); return; }
-  if ($('kind').value === 'Door' && !f.host) { $('runErr').textContent = 'Add a wall first.'; return; }
+  if (['Door', 'Window'].includes($('kind').value) && !f.host) { $('runErr').textContent = 'Add a wall first.'; return; }
   snapshot();
   project.elements.push({ id: uuid(), name: f.name, kind: k.build(f), discipline: k.disc, phase: +fd.get('phase'), start_offset_days: 0, lod: 'Lod200', cost_code: k.code, material: '', level: currentLevel()?.id ?? null });
   rerun();

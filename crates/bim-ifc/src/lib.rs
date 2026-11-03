@@ -38,6 +38,7 @@ enum Kind {
     Beam,
     Wall,
     Door,
+    Window,
     Stair,
     Ramp,
     Space,
@@ -50,6 +51,7 @@ fn kind_of(ty: &str) -> Option<Kind> {
         "IFCCOLUMN" | "IFCCOLUMNSTANDARDCASE" => Kind::Column,
         "IFCBEAM" | "IFCBEAMSTANDARDCASE" => Kind::Beam,
         "IFCDOOR" | "IFCDOORSTANDARDCASE" => Kind::Door,
+        "IFCWINDOW" | "IFCWINDOWSTANDARDCASE" => Kind::Window,
         "IFCSTAIRFLIGHT" | "IFCSTAIR" => Kind::Stair,
         "IFCRAMPFLIGHT" | "IFCRAMP" => Kind::Ramp,
         "IFCSPACE" => Kind::Space,
@@ -547,6 +549,41 @@ fn layer_thickness(f: &StepFile, id: u64) -> Option<f64> {
                 .sum(),
         ),
         _ => None,
+    }
+}
+
+/// Whether a window opens: from its type's panel properties (any panel that is not a fixed
+/// casement), else its name ("Fixed" families, or casement/sliding/hung/awning/hopper ones).
+fn window_operable(f: &StepFile, e: &Entity, type_id: Option<u64>) -> Option<bool> {
+    let panels: Vec<&str> = type_id
+        .and_then(|t| f.entities.get(&t))
+        .filter(|t| matches!(t.ty.as_str(), "IFCWINDOWSTYLE" | "IFCWINDOWTYPE"))
+        .map(|t| {
+            t.arg(5)
+                .list()
+                .iter()
+                .filter_map(|ps| f.entities.get(&ps.id()?))
+                .filter(|ps| ps.ty == "IFCWINDOWPANELPROPERTIES")
+                .filter_map(|ps| ps.arg(4).enumv())
+                .filter(|o| !matches!(*o, "NOTDEFINED" | "OTHEROPERATION"))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !panels.is_empty() {
+        return Some(panels.iter().any(|o| *o != "FIXEDCASEMENT"));
+    }
+    let n = e.arg(2).str().unwrap_or("").to_lowercase();
+    if n.contains("fixed") {
+        Some(false)
+    } else if [
+        "casement", "sliding", "slider", "hung", "awning", "hopper", "operable", "tilt",
+    ]
+    .iter()
+    .any(|w| n.contains(w))
+    {
+        Some(true)
+    } else {
+        None
     }
 }
 
@@ -1136,7 +1173,7 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
                     ),
                 }
             }
-            Kind::Door => continue, // after walls
+            Kind::Door | Kind::Window => continue, // after walls
             Kind::Space => {
                 let s = b.max - b.min;
                 if s.x <= 1e-4 || s.z <= 1e-4 {
@@ -1165,6 +1202,9 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
                     s.x * s.z,
                 );
                 sp.bounds = Some([b.min.x, b.min.z, s.x, s.z]);
+                // the space's own height (exporters usually bound it by the ceiling or the
+                // level above; a hint, not a measured ceiling)
+                sp.height_m = (s.y > 1.0).then_some(s.y);
                 let measured = quant(*id, "NetFloorArea")
                     .or_else(|| quant(*id, "GrossFloorArea"))
                     .filter(|q| *q > 0.0)
@@ -1226,6 +1266,8 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
     let mut placed: HashMap<ElementId, Vec<(f32, f32)>> = HashMap::new();
     let mut dropped_overlap = 0;
     let mut passages = 0;
+    let mut unhosted_windows = 0;
+    let mut duplicate_windows = 0;
     let items = found
         .iter()
         .filter(|(k, _, _)| *k == Kind::Door)
@@ -1371,6 +1413,106 @@ pub fn import(text: &str, fallback_name: &str) -> Result<ImportResult, IfcError>
             *count.entry("doors").or_default() += 1;
         }
         p.add(el);
+    }
+    // windows: on the wall they fill, else the nearest wall they sit in; sill above the
+    // wall's base
+    // (offset, width, sill, height) of the windows placed on each wall
+    let mut window_spans: HashMap<ElementId, Vec<(f32, f32, f32, f32)>> = HashMap::new();
+    for (_, id, pts) in found.iter().filter(|(k, _, _)| *k == Kind::Window) {
+        let e = &f.entities[id];
+        let pts: Vec<Vec3> = pts.iter().map(|q| *q + shift).collect();
+        let b = bounds(&pts);
+        let centre = (b.min + b.max) / 2.0;
+        let host = fill_opening
+            .get(id)
+            .and_then(|o| void_host.get(o))
+            .and_then(|w| walls.get(w))
+            .or_else(|| {
+                walls
+                    .values()
+                    .filter(|(_, s, t, _, th)| dist_to_segment(centre, *s, *t) <= th / 2.0 + 0.3)
+                    .min_by(|a, c| {
+                        dist_to_segment(centre, a.1, a.2)
+                            .total_cmp(&dist_to_segment(centre, c.1, c.2))
+                    })
+            });
+        let Some(&(wall_id, s, t, wall_h, _)) = host else {
+            unhosted_windows += 1;
+            continue;
+        };
+        let len = s.distance(t);
+        let dir = (t - s) / len;
+        let (mut t0, mut t1) = (f32::MAX, f32::MIN);
+        for q in &pts {
+            let a = (*q - s).dot(dir);
+            (t0, t1) = (t0.min(a), t1.max(a));
+        }
+        let size = |i: usize| {
+            e.arg(i)
+                .num()
+                .map(|v| (v * len_scale) as f32)
+                .filter(|v| *v > 0.0)
+        };
+        let width = size(9).unwrap_or(t1 - t0).min(len);
+        let sill = (b.min.y - s.y).clamp(0.0, wall_h);
+        let height = size(8).unwrap_or(b.max.y - b.min.y).min(wall_h - sill);
+        let offset = ((t0 + t1) / 2.0 - width / 2.0).clamp(0.0, (len - width).max(0.0));
+        if width <= 1e-4 || height <= 1e-4 {
+            degenerate += 1;
+            continue;
+        }
+        let spans = window_spans.entry(wall_id).or_default();
+        // the same opening twice (curtain-wall panels exported twice); windows stacked one
+        // above another (a casement over a fixed light) are both kept
+        if spans.iter().any(|(o, w, si, h)| {
+            offset < o + w - 1e-4
+                && *o < offset + width - 1e-4
+                && sill < si + h - 1e-4
+                && *si < sill + height - 1e-4
+        }) {
+            duplicate_windows += 1;
+            continue;
+        }
+        spans.push((offset, width, sill, height));
+        let label = e
+            .arg(2)
+            .str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{} #{id}", e.ty));
+        let mut el = Element::new(
+            label,
+            ElementKind::Window {
+                host: wall_id,
+                offset,
+                width: width.min(len - offset),
+                height,
+                sill,
+                operable: window_operable(&f, e, type_of.get(id).copied()),
+            },
+            Discipline::Architectural,
+            ENVELOPE,
+        );
+        el.cost_code = "B2020".into();
+        el.id = unique_id(e, &mut used_ids);
+        el.level = level_for(*id).or_else(|| {
+            p.elements
+                .iter()
+                .find(|w| w.id == wall_id)
+                .and_then(|w| w.level)
+        });
+        *count.entry("windows").or_default() += 1;
+        p.add(el);
+    }
+    if duplicate_windows > 0 {
+        notes.push(format!(
+            "{duplicate_windows} window(s) skipped: they overlap another window in the same wall."
+        ));
+    }
+    if unhosted_windows > 0 {
+        notes.push(format!(
+            "{unhosted_windows} window(s) skipped: no host wall found."
+        ));
     }
     // egress doors on each space's boundary
     for (sp, id) in p.spaces.iter_mut().zip(space_src) {
@@ -1550,6 +1692,7 @@ fn plural(k: &Kind) -> &'static str {
         Kind::Column => "columns",
         Kind::Beam => "beams",
         Kind::Door => "doors",
+        Kind::Window => "windows",
         Kind::Stair => "stairs",
         Kind::Ramp => "ramps",
         Kind::Space => "spaces",

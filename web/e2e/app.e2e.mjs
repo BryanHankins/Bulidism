@@ -188,3 +188,29 @@ test('dwelling units: residential rooms grouped into units, IRC note on the shee
   assert.deepEqual(errors, []);
   await ctx.close();
 });
+
+test('IRC rule set: a bedroom with only a small fixed window has no escape opening', async () => {
+  const { page, ctx, errors } = await openApp();
+  await applyJson(page, p => {
+    // a 3 x 3 m bedroom in the office's south-west corner, behind a wall with a door, and a
+    // 0.6 m fixed window in the office's west wall
+    const west = crypto.randomUUID(), part = crypto.randomUUID();
+    const mk = (id, name, kind) => ({ id, name, kind, discipline: 'Architectural', phase: 2, start_offset_days: 0, lod: 'Lod200', cost_code: 'B2010', material: '', level: 0 });
+    p.elements.push(mk(west, 'West wall', { Wall: { start: [0, 0.2, 0], end: [0, 0.2, 8], height: 3, thickness: 0.2 } }));
+    p.elements.push(mk(part, 'Bedroom wall', { Wall: { start: [0, 0.2, 3], end: [3, 0.2, 3], height: 2.7, thickness: 0.1 } }));
+    p.elements.push(mk(crypto.randomUUID(), 'Bedroom door', { Door: { host: part, offset: 1, width: 0.8, height: 2.0, is_egress: false } }));
+    p.elements.push(mk(crypto.randomUUID(), 'Small window', { Window: { host: west, offset: 1, width: 0.6, height: 0.6, sill: 0.9, operable: false } }));
+    p.spaces.push({ name: 'Bedroom', occupancy: 'Residential', floor_area_m2: 9, egress_doors: [], bounds: [0, 0, 3, 3], level: 0 });
+    p.rule_set = 'IRC-2021';
+  });
+  await page.waitForFunction(() => /IRC 2021 R310/.test(document.getElementById('advs').innerText));
+  const advs = await text(page, '#advs');
+  assert.match(advs, /Bedroom: sleeping room whose 1 window\(s\) to outside are all fixed glazing/);
+  assert.equal(await page.evaluate(() => document.getElementById('ruleSet').value), 'IRC-2021');
+  // make the window an operable 1.0 x 1.0 m casement: it becomes the escape opening
+  await applyJson(page, p => { const w = p.elements.find(e => e.name === 'Small window').kind.Window; Object.assign(w, { width: 1, height: 1, sill: 0.6, operable: true }); });
+  await page.waitForFunction(() => !/fixed glazing/.test(document.getElementById('advs').innerText));
+  assert.doesNotMatch(await text(page, '#advs'), /R310/);
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});

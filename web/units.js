@@ -55,6 +55,8 @@ export function fmtMeasure(v, measure, sys) {
   if (v == null) return '—';
   if (measure === 'length') return fmtLen(v, sys);
   if (measure === 'ratio') return `1:${(+v).toFixed(1)}`;
+  if (measure === 'area') return sys === 'imperial' ? `${(v / M2_PER_SF).toFixed(1)} sf` : `${(+v).toFixed(2)} m²`;
+  if (measure === 'fraction') return `${(v * 100).toFixed(1)}%`;
   return String(Math.round(v));
 }
 
@@ -69,7 +71,9 @@ export function qtyOut(qty, unit, sys) {
   }
 }
 
-/** Rewrite metric lengths in engine messages ("0.686 m") for display. */
+/** Rewrite metric lengths ("0.686 m") and areas ("0.45 m2") in engine messages for display. */
 export const convertMessage = (msg, sys) => sys === 'imperial'
-  ? String(msg).replace(/(-?\d+(?:\.\d+)?) m(?![\w²³])/g, (_, v) => ftIn(+v))
+  ? String(msg)
+    .replace(/(-?\d+(?:\.\d+)?) m2\b/g, (_, v) => `${(v / M2_PER_SF).toFixed(1)} sf`)
+    .replace(/(-?\d+(?:\.\d+)?) m(?![\w²³])/g, (_, v) => ftIn(+v))
   : msg;
